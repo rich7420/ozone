@@ -74,7 +74,7 @@ public class TestFSORepairTool {
 
   private static final Logger LOG = LoggerFactory.getLogger(TestFSORepairTool.class);
   private static final int ORDER_DRY_RUN = 1;
-  //private static final int ORDER_REPAIR_SOME = 2; // TODO add test case
+  // private static final int ORDER_REPAIR_SOME = 2; // TODO add test case
   private static final int ORDER_REPAIR_ALL = 3;
   private static final int ORDER_REPAIR_ALL_AGAIN = 4;
   private static final int ORDER_RESTART_OM = 5;
@@ -127,23 +127,23 @@ public class TestFSORepairTool {
 
     // Create legacy and OBS buckets.
     store.getVolume("vol1").createBucket("obs-bucket",
-            BucketArgs.newBuilder().setBucketLayout(BucketLayout.OBJECT_STORE)
-                    .build());
+        BucketArgs.newBuilder().setBucketLayout(BucketLayout.OBJECT_STORE)
+            .build());
     store.getVolume("vol1").createBucket("legacy-bucket",
-            BucketArgs.newBuilder().setBucketLayout(BucketLayout.LEGACY)
-                    .build());
+        BucketArgs.newBuilder().setBucketLayout(BucketLayout.LEGACY)
+            .build());
 
     // Put a key in the legacy and OBS buckets.
     OzoneOutputStream obsStream = store.getVolume("vol1")
-            .getBucket("obs-bucket")
-            .createKey("prefix/test-key", 3);
-    obsStream.write(new byte[]{1, 1, 1});
+        .getBucket("obs-bucket")
+        .createKey("prefix/test-key", 3);
+    obsStream.write(new byte[] { 1, 1, 1 });
     obsStream.close();
 
     OzoneOutputStream legacyStream = store.getVolume("vol1")
-            .getBucket("legacy-bucket")
-            .createKey("prefix/test-key", 3);
-    legacyStream.write(new byte[]{1, 1, 1});
+        .getBucket("legacy-bucket")
+        .createKey("prefix/test-key", 3);
+    legacyStream.write(new byte[] { 1, 1, 1 });
     legacyStream.close();
 
     // Stop the OM before running the tool
@@ -181,11 +181,12 @@ public class TestFSORepairTool {
 
   /**
    * Test to check a connected tree with one bucket.
-   * The output remains the same in debug and repair mode as the tree is connected.
+   * The output remains the same in debug and repair mode as the tree is
+   * connected.
    */
   @Order(ORDER_DRY_RUN)
   @ParameterizedTest
-  @ValueSource(booleans = {true, false})
+  @ValueSource(booleans = { true, false })
   void testConnectedTreeOneBucket(boolean dryRun) {
     String expectedOutput = serializeReport(vol1Report);
 
@@ -281,7 +282,8 @@ public class TestFSORepairTool {
   }
 
   /**
-   * Test to verify that non-fso buckets, such as legacy and obs, are skipped during the process.
+   * Test to verify that non-fso buckets, such as legacy and obs, are skipped
+   * during the process.
    */
   @Order(ORDER_DRY_RUN)
   @Test
@@ -295,7 +297,8 @@ public class TestFSORepairTool {
   }
 
   /**
-   * If no file is present inside a vol/bucket, the report statistics should be zero.
+   * If no file is present inside a vol/bucket, the report statistics should be
+   * zero.
    */
   @Order(ORDER_DRY_RUN)
   @Test
@@ -349,10 +352,12 @@ public class TestFSORepairTool {
 
     // 5 volumes (/s3v, /vol1, /vol2, /vol-empty, /vol-unreachable)
     assertEquals(5, countTableEntries(cluster.getOzoneManager().getMetadataManager().getVolumeTable()));
-    // 7 buckets (vol1/bucket1, vol2/bucket1, vol2/bucket2, vol-empty/bucket-empty, vol/legacy-bucket, vol1/obs-bucket,
+    // 7 buckets (vol1/bucket1, vol2/bucket1, vol2/bucket2, vol-empty/bucket-empty,
+    // vol/legacy-bucket, vol1/obs-bucket,
     // /vol-unreachable/bucket-unreachable)
     assertEquals(7, countTableEntries(cluster.getOzoneManager().getMetadataManager().getBucketTable()));
-    // 1 directory is unreferenced and moved to the deletedDirTable during repair mode
+    // 1 directory is unreferenced and moved to the deletedDirTable during repair
+    // mode
     // 1 is moved to deletedDirTable for testing
     assertEquals(2, countTableEntries(cluster.getOzoneManager().getMetadataManager().getDeletedDirTable()));
     // 3 files are unreferenced and moved to the deletedTable during repair mode.
@@ -400,18 +405,17 @@ public class TestFSORepairTool {
   private String serializeReport(FSORepairTool.Report report) {
     return String.format(
         "Reachable:%n\tDirectories: %d%n\tFiles: %d%n\tBytes: %d%n" +
-        "Unreachable (Pending to delete):%n\tDirectories: %d%n\tFiles: %d%n\tBytes: %d%n" +
-        "Unreferenced (Orphaned):%n\tDirectories: %d%n\tFiles: %d%n\tBytes: %d",
+            "Unreachable (Pending to delete):%n\tDirectories: %d%n\tFiles: %d%n\tBytes: %d%n" +
+            "Unreferenced (Orphaned):%n\tDirectories: %d%n\tFiles: %d%n\tBytes: %d",
         report.getReachable().getDirs(),
         report.getReachable().getFiles(),
         report.getReachable().getBytes(),
-        report.getUnreachable().getDirs(),
-        report.getUnreachable().getFiles(),
-        report.getUnreachable().getBytes(),
-        report.getUnreferenced().getDirs(),
-        report.getUnreferenced().getFiles(),
-        report.getUnreferenced().getBytes()
-    );
+        report.getPendingDelete().getDirs(),
+        report.getPendingDelete().getFiles(),
+        report.getPendingDelete().getBytes(),
+        report.getOrphaned().getDirs(),
+        report.getOrphaned().getFiles(),
+        report.getOrphaned().getBytes());
   }
 
   /**
@@ -451,8 +455,7 @@ public class TestFSORepairTool {
 
     assertConnectedTreeReadable(volume, bucket);
 
-    FSORepairTool.ReportStatistics reachableCount =
-            new FSORepairTool.ReportStatistics(3, 4, fileSize * 4L);
+    FSORepairTool.ReportStatistics reachableCount = new FSORepairTool.ReportStatistics(3, 4, fileSize * 4L);
     return new FSORepairTool.Report.Builder()
         .setReachable(reachableCount)
         .build();
@@ -460,16 +463,13 @@ public class TestFSORepairTool {
 
   private static FSORepairTool.Report buildEmptyTree() throws IOException {
     fs.mkdirs(new Path("/vol-empty/bucket-empty"));
-    FSORepairTool.ReportStatistics reachableCount =
-            new FSORepairTool.ReportStatistics(0, 0, 0);
-    FSORepairTool.ReportStatistics unreachableCount =
-            new FSORepairTool.ReportStatistics(0, 0, 0);
-    FSORepairTool.ReportStatistics unreferencedCount =
-            new FSORepairTool.ReportStatistics(0, 0, 0);
+    FSORepairTool.ReportStatistics reachableCount = new FSORepairTool.ReportStatistics(0, 0, 0);
+    FSORepairTool.ReportStatistics pendingDeleteCount = new FSORepairTool.ReportStatistics(0, 0, 0);
+    FSORepairTool.ReportStatistics orphanedCount = new FSORepairTool.ReportStatistics(0, 0, 0);
     return new FSORepairTool.Report.Builder()
         .setReachable(reachableCount)
-        .setUnreachable(unreachableCount)
-        .setUnreferenced(unreferencedCount)
+        .setPendingDelete(pendingDeleteCount)
+        .setOrphaned(orphanedCount)
         .build();
   }
 
@@ -481,10 +481,10 @@ public class TestFSORepairTool {
     Path childDir = new Path(parentToDelete, "childDir");
     Path file1 = new Path(parentToDelete, "file1.txt");
     Path file2 = new Path(childDir, "file2.txt");
-    
+
     Path reachableDir = new Path(bucketPath, "reachableDir");
     Path reachableFile = new Path(reachableDir, "reachableFile.txt");
-    
+
     fs.mkdirs(childDir);
     fs.mkdirs(reachableDir);
 
@@ -500,21 +500,18 @@ public class TestFSORepairTool {
     stream = fs.create(reachableFile);
     stream.write(data.getBytes(StandardCharsets.UTF_8));
     stream.close();
-    
+
     // Simulate parent deletion by moving parentToDelete to deleted directory table
     // This makes childDir, file1 and file2 unreachable
     moveDirectoryToDeletedTable(volume, bucket, "parentToDelete");
 
-    FSORepairTool.ReportStatistics reachableCount = 
-        new FSORepairTool.ReportStatistics(1, 1, fileSize);
-    FSORepairTool.ReportStatistics unreachableCount =
-        new FSORepairTool.ReportStatistics(1, 2, fileSize * 2L);
-    FSORepairTool.ReportStatistics unreferencedCount =
-        new FSORepairTool.ReportStatistics(0, 0, 0);
+    FSORepairTool.ReportStatistics reachableCount = new FSORepairTool.ReportStatistics(1, 1, fileSize);
+    FSORepairTool.ReportStatistics pendingDeleteCount = new FSORepairTool.ReportStatistics(1, 2, fileSize * 2L);
+    FSORepairTool.ReportStatistics orphanedCount = new FSORepairTool.ReportStatistics(0, 0, 0);
     return new FSORepairTool.Report.Builder()
         .setReachable(reachableCount)
-        .setUnreachable(unreachableCount)
-        .setUnreferenced(unreferencedCount)
+        .setPendingDelete(pendingDeleteCount)
+        .setOrphaned(orphanedCount)
         .build();
   }
 
@@ -522,18 +519,19 @@ public class TestFSORepairTool {
    * Move a directory from directory table to deleted directory table.
    * This is used to verify unreachable objects.
    */
-  private static void moveDirectoryToDeletedTable(String volumeName, String bucketName, String dirName) 
+  private static void moveDirectoryToDeletedTable(String volumeName, String bucketName, String dirName)
       throws Exception {
     Table<String, OmDirectoryInfo> dirTable = cluster.getOzoneManager().getMetadataManager().getDirectoryTable();
     Table<String, OmKeyInfo> deletedDirTable = cluster.getOzoneManager().getMetadataManager().getDeletedDirTable();
-    
+
     try (Table.KeyValueIterator<String, OmDirectoryInfo> iterator = dirTable.iterator()) {
       while (iterator.hasNext()) {
         Table.KeyValue<String, OmDirectoryInfo> entry = iterator.next();
         String key = entry.getKey();
         OmDirectoryInfo dirInfo = entry.getValue();
-        
-        // Find the directory by name, remove from directory table and add to deleted directory table
+
+        // Find the directory by name, remove from directory table and add to deleted
+        // directory table
         if (key.contains(dirName) && dirInfo.getName().equals(dirName)) {
           dirTable.delete(key);
           String deleteDirKeyName = key + OM_KEY_PREFIX + dirInfo.getObjectID();
@@ -572,7 +570,7 @@ public class TestFSORepairTool {
    * unreferenced directory, and 3 unreferenced files.
    */
   private static FSORepairTool.Report buildDisconnectedTree(String volume, String bucket, int fileSize)
-        throws Exception {
+      throws Exception {
     buildConnectedTree(volume, bucket, fileSize);
 
     // Manually remove dir1. This should disconnect 3 of the files and 1 of
@@ -583,13 +581,11 @@ public class TestFSORepairTool {
 
     // dir1 does not count towards the unreferenced directories the tool
     // will see. It was deleted completely so the tool will never see it.
-    FSORepairTool.ReportStatistics reachableCount =
-            new FSORepairTool.ReportStatistics(1, 1, fileSize);
-    FSORepairTool.ReportStatistics unreferencedCount =
-            new FSORepairTool.ReportStatistics(1, 3, fileSize * 3L);
+    FSORepairTool.ReportStatistics reachableCount = new FSORepairTool.ReportStatistics(1, 1, fileSize);
+    FSORepairTool.ReportStatistics orphanedCount = new FSORepairTool.ReportStatistics(1, 3, fileSize * 3L);
     return new FSORepairTool.Report.Builder()
         .setReachable(reachableCount)
-        .setUnreferenced(unreferencedCount)
+        .setOrphaned(orphanedCount)
         .build();
   }
 

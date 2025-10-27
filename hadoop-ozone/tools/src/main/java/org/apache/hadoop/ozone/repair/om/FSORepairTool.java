@@ -38,7 +38,6 @@ import org.apache.hadoop.hdds.utils.db.Table;
 import org.apache.hadoop.hdds.utils.db.TableIterator;
 import org.apache.hadoop.hdds.utils.db.TypedTable;
 import org.apache.hadoop.ozone.OmUtils;
-import org.apache.hadoop.ozone.om.OmMetadataManagerImpl;
 import org.apache.hadoop.ozone.om.codec.OMDBDefinition;
 import org.apache.hadoop.ozone.om.helpers.BucketLayout;
 import org.apache.hadoop.ozone.om.helpers.OmBucketInfo;
@@ -57,50 +56,61 @@ import picocli.CommandLine;
 
 /**
  * Base Tool to identify and repair disconnected FSO trees across all buckets.
- * This tool logs information about reachable, unreachable and unreferenced files and directories in debug mode
- * and moves these unreferenced files and directories to the deleted tables in repair mode.
-
- * If deletes are still in progress (the deleted directory table is not empty), the tool
- * reports that the tree is unreachable, even though pending deletes would fix the issue.
- * If not, the tool reports them as unreferenced and deletes them in repair mode.
-
- * Before using the tool, make sure all OMs are stopped, and that all Ratis logs have been flushed to the OM DB.
- * This can be done using `ozone admin prepare` before running the tool, and `ozone admin
+ * This tool logs information about reachable, pending delete (unreachable) and
+ * orphaned (unreferenced)
+ * files and directories in debug mode
+ * and moves these orphaned files and directories to the deleted tables in
+ * repair mode.
+ * 
+ * If deletes are still in progress (the deleted directory table is not empty),
+ * the tool
+ * reports that the tree is pending delete (unreachable), even though pending
+ * deletes would fix
+ * the issue.
+ * If not, the tool reports them as orphaned and deletes them in repair
+ * mode.
+ * 
+ * Before using the tool, make sure all OMs are stopped, and that all Ratis logs
+ * have been flushed to the OM DB.
+ * This can be done using `ozone admin prepare` before running the tool, and
+ * `ozone admin
  * cancelprepare` when done.
-
- * The tool will run a DFS from each bucket, and save all reachable directories as objectID-based keys in a
- * temporary RocksDB instance called "temp.db" in the same directory as om.db. It will also scan the
- * deletedDirectoryTable to identify objects pending deletion and store them as original keys in an unreachable
+ * 
+ * The tool will run a DFS from each bucket, and save all reachable directories
+ * as objectID-based keys in a
+ * temporary RocksDB instance called "temp.db" in the same directory as om.db.
+ * It will also scan the
+ * deletedDirectoryTable to identify objects pending deletion and store them as
+ * original keys in a pending delete
  * table within the same temp.db instance.
-
- * It will then scan the entire file and directory tables for each bucket to classify each object:
- * - REACHABLE: Object's parent is in the reachable table (accessible from bucket root)
- * - UNREACHABLE: Object is in the unreachable table (pending deletion)
- * - UNREFERENCED: Object is neither reachable nor unreachable (orphaned, needs repair)
- * The tool is idempotent. temp.db will be automatically deleted when the tool finishes to ensure clean state.
+ * 
+ * It will then scan the entire file and directory tables for each bucket to
+ * classify each object:
+ * - REACHABLE: Object's parent is in the reachable table (accessible from
+ * bucket root)
+ * - PENDING DELETE: Object is in the pending delete table (pending deletion)
+ * - ORPHANED: Object is neither reachable nor pending delete (orphaned, needs
+ * repair)
+ * The tool is idempotent. temp.db will be automatically deleted when the tool
+ * finishes to ensure clean state.
  */
-@CommandLine.Command(
-    name = "fso-tree",
-    description = "Identify and repair a disconnected FSO tree by marking unreferenced (orphaned) entries for " +
-        "deletion. OM should be stopped while this tool is run."
-)
+@CommandLine.Command(name = "fso-tree", description = "Identify and repair a disconnected FSO tree by marking unreferenced (orphaned) entries for "
+    +
+    "deletion. OM should be stopped while this tool is run.")
 public class FSORepairTool extends RepairTool {
   private static final Logger LOG = LoggerFactory.getLogger(FSORepairTool.class);
   private static final String REACHABLE_TABLE = "reachable";
-  private static final String UNREACHABLE_TABLE = "unreachable";
+  private static final String PENDING_DELETE_TABLE = "unreachable";
   private static final byte[] EMPTY_BYTE_ARRAY = {};
 
-  @CommandLine.Option(names = {"--db"},
-      required = true,
-      description = "Path to OM RocksDB")
+  @CommandLine.Option(names = { "--db" }, required = true, description = "Path to OM RocksDB")
   private String omDBPath;
 
-  @CommandLine.Option(names = {"-v", "--volume"},
-      description = "Filter by volume name. Add '/' before the volume name.")
+  @CommandLine.Option(names = { "-v",
+      "--volume" }, description = "Filter by volume name. Add '/' before the volume name.")
   private String volumeFilter;
 
-  @CommandLine.Option(names = {"-b", "--bucket"},
-      description = "Filter by bucket name")
+  @CommandLine.Option(names = { "-b", "--bucket" }, description = "Filter by bucket name")
   private String bucketFilter;
 
   @Nonnull
@@ -136,15 +146,15 @@ public class FSORepairTool extends RepairTool {
     private final Table<String, SnapshotInfo> snapshotInfoTable;
     private DBStore tempDB;
     private TypedTable<String, byte[]> reachableTable;
-    private TypedTable<String, byte[]> unreachableTable;
+    private TypedTable<String, byte[]> pendingDeleteTable;
     private final ReportStatistics reachableStats;
-    private final ReportStatistics unreachableStats;
-    private final ReportStatistics unreferencedStats;
+    private final ReportStatistics pendingDeleteStats;
+    private final ReportStatistics orphanedStats;
 
     Impl() throws IOException {
       this.reachableStats = new ReportStatistics(0, 0, 0);
-      this.unreachableStats = new ReportStatistics(0, 0, 0);
-      this.unreferencedStats = new ReportStatistics(0, 0, 0);
+      this.pendingDeleteStats = new ReportStatistics(0, 0, 0);
+      this.orphanedStats = new ReportStatistics(0, 0, 0);
 
       this.store = getStoreFromPath(omDBPath);
       this.volumeTable = OMDBDefinition.VOLUME_TABLE_DEF.getTable(store);
@@ -172,8 +182,8 @@ public class FSORepairTool extends RepairTool {
         }
 
         // Iterate all volumes or a specific volume if specified
-        try (TableIterator<String, ? extends Table.KeyValue<String, OmVolumeArgs>>
-                 volumeIterator = volumeTable.iterator()) {
+        try (TableIterator<String, ? extends Table.KeyValue<String, OmVolumeArgs>> volumeIterator = volumeTable
+            .iterator()) {
           try {
             openTempDB();
           } catch (IOException e) {
@@ -193,7 +203,7 @@ public class FSORepairTool extends RepairTool {
             if (bucketFilter != null) {
               OmBucketInfo bucketInfo = bucketTable.getIfExist(volumeKey + "/" + bucketFilter);
               if (bucketInfo == null) {
-                //Bucket does not exist in the volume
+                // Bucket does not exist in the volume
                 error("Bucket '" + bucketFilter + "' does not exist in volume '" + volumeKey + "'.");
                 return null;
               }
@@ -207,8 +217,8 @@ public class FSORepairTool extends RepairTool {
             } else {
 
               // Iterate all buckets in the volume.
-              try (TableIterator<String, ? extends Table.KeyValue<String, OmBucketInfo>>
-                       bucketIterator = bucketTable.iterator()) {
+              try (TableIterator<String, ? extends Table.KeyValue<String, OmBucketInfo>> bucketIterator = bucketTable
+                  .iterator()) {
                 bucketIterator.seek(volumeKey);
                 while (bucketIterator.hasNext()) {
                   Table.KeyValue<String, OmBucketInfo> bucketEntry = bucketIterator.next();
@@ -248,8 +258,8 @@ public class FSORepairTool extends RepairTool {
         return false;
       }
 
-      try (TableIterator<String, ? extends Table.KeyValue<String, SnapshotInfo>> iterator =
-               snapshotInfoTable.iterator()) {
+      try (TableIterator<String, ? extends Table.KeyValue<String, SnapshotInfo>> iterator = snapshotInfoTable
+          .iterator()) {
         while (iterator.hasNext()) {
           SnapshotInfo snapshotInfo = iterator.next().getValue();
           String snapshotPath = (volumeName + "/" + bucketName).replaceFirst("^/", "");
@@ -264,20 +274,20 @@ public class FSORepairTool extends RepairTool {
     private void processBucket(OmVolumeArgs volume, OmBucketInfo bucketInfo) throws IOException {
       if (checkIfSnapshotExistsForBucket(volume.getVolume(), bucketInfo.getBucketName())) {
         info("Skipping repair for bucket '" + volume.getVolume() + "/" + bucketInfo.getBucketName() + "' " +
-                "due to snapshot presence.");
+            "due to snapshot presence.");
         return;
       }
       info("Processing bucket: " + volume.getVolume() + "/" + bucketInfo.getBucketName());
       markReachableObjectsInBucket(volume, bucketInfo);
-      markUnreachableObjectsInBucket(volume, bucketInfo);
-      handleUnreachableAndUnreferencedObjects(volume, bucketInfo);
+      markPendingDeleteObjectsInBucket(volume, bucketInfo);
+      handlePendingDeleteAndOrphanedObjects(volume, bucketInfo);
     }
 
     private Report buildReportAndLog() {
       Report report = new Report.Builder()
           .setReachable(reachableStats)
-          .setUnreachable(unreachableStats)
-          .setUnreferenced(unreferencedStats)
+          .setPendingDelete(pendingDeleteStats)
+          .setOrphaned(orphanedStats)
           .build();
 
       info("\n" + report);
@@ -309,13 +319,13 @@ public class FSORepairTool extends RepairTool {
         }
 
         // TODO revisit this for a more memory efficient implementation,
-        //  possibly making better use of RocksDB iterators.
+        // possibly making better use of RocksDB iterators.
         childDirs = getChildDirectoriesAndMarkAsReachable(volume, bucket, currentDir);
         dirKeyStack.addAll(childDirs);
       }
     }
 
-    private void markUnreachableObjectsInBucket(OmVolumeArgs volume, OmBucketInfo bucket) throws IOException {
+    private void markPendingDeleteObjectsInBucket(OmVolumeArgs volume, OmBucketInfo bucket) throws IOException {
       // Only put directories in the stack.
       // Directory keys should have the form /volumeID/bucketID/parentID/name.
       Stack<String> dirKeyStack = new Stack<>();
@@ -323,8 +333,8 @@ public class FSORepairTool extends RepairTool {
       // Find all deleted directories in this bucket and process their children
       String bucketPrefix = OM_KEY_PREFIX + volume.getObjectID() + OM_KEY_PREFIX + bucket.getObjectID();
 
-      try (TableIterator<String, ? extends Table.KeyValue<String, OmKeyInfo>> deletedDirIterator =
-               deletedDirectoryTable.iterator()) {
+      try (TableIterator<String, ? extends Table.KeyValue<String, OmKeyInfo>> deletedDirIterator = deletedDirectoryTable
+          .iterator()) {
         deletedDirIterator.seek(bucketPrefix);
         while (deletedDirIterator.hasNext()) {
           Table.KeyValue<String, OmKeyInfo> deletedDirEntry = deletedDirIterator.next();
@@ -343,8 +353,8 @@ public class FSORepairTool extends RepairTool {
           String childPrefix = OM_KEY_PREFIX + volume.getObjectID() + OM_KEY_PREFIX + bucket.getObjectID() +
               OM_KEY_PREFIX + deletedObjectID + OM_KEY_PREFIX;
 
-          // Find all children of this deleted directory and mark as unreachable
-          Collection<String> childDirs = getChildDirectoriesAndMarkAsUnreachable(childPrefix);
+          // Find all children of this deleted directory and mark as pending delete
+          Collection<String> childDirs = getChildDirectoriesAndMarkAsPendingDelete(childPrefix);
           dirKeyStack.addAll(childDirs);
         }
       }
@@ -360,23 +370,24 @@ public class FSORepairTool extends RepairTool {
           continue;
         }
 
-        // For unreachable directories, we need to build the prefix based on their objectID
+        // For pending delete directories, we need to build the prefix based on their
+        // objectID
         String childPrefix = OM_KEY_PREFIX + volume.getObjectID() + OM_KEY_PREFIX + bucket.getObjectID() +
             OM_KEY_PREFIX + currentDir.getObjectID() + OM_KEY_PREFIX;
-        Collection<String> childDirs = getChildDirectoriesAndMarkAsUnreachable(childPrefix);
+        Collection<String> childDirs = getChildDirectoriesAndMarkAsPendingDelete(childPrefix);
         dirKeyStack.addAll(childDirs);
       }
     }
 
-    private void handleUnreachableAndUnreferencedObjects(OmVolumeArgs volume, OmBucketInfo bucket) throws IOException {
-      // Check for unreachable and unreferenced directories in the bucket.
+    private void handlePendingDeleteAndOrphanedObjects(OmVolumeArgs volume, OmBucketInfo bucket) throws IOException {
+      // Check for pending delete and orphaned directories in the bucket.
       String bucketPrefix = OM_KEY_PREFIX +
           volume.getObjectID() +
           OM_KEY_PREFIX +
           bucket.getObjectID();
 
-      try (TableIterator<String, ? extends Table.KeyValue<String, OmDirectoryInfo>> dirIterator =
-               directoryTable.iterator()) {
+      try (TableIterator<String, ? extends Table.KeyValue<String, OmDirectoryInfo>> dirIterator = directoryTable
+          .iterator()) {
         dirIterator.seek(bucketPrefix);
         while (dirIterator.hasNext()) {
           Table.KeyValue<String, OmDirectoryInfo> dirEntry = dirIterator.next();
@@ -388,10 +399,10 @@ public class FSORepairTool extends RepairTool {
           }
 
           if (!isReachable(dirKey)) {
-            if (!isUnreachable(dirKey)) {
-              unreferencedStats.addDir();
+            if (!isPendingDelete(dirKey)) {
+              orphanedStats.addDir();
 
-              info("Deleting unreferenced directory " + dirKey);
+              info("Deleting orphaned directory " + dirKey);
               if (!isDryRun()) {
                 OmDirectoryInfo dirInfo = dirEntry.getValue();
                 markDirectoryForDeletion(volume.getVolume(), bucket.getBucketName(), dirKey, dirInfo);
@@ -401,9 +412,8 @@ public class FSORepairTool extends RepairTool {
         }
       }
 
-      // Check for unreachable and unreferenced files
-      try (TableIterator<String, ? extends Table.KeyValue<String, OmKeyInfo>>
-               fileIterator = fileTable.iterator()) {
+      // Check for pending delete and orphaned files
+      try (TableIterator<String, ? extends Table.KeyValue<String, OmKeyInfo>> fileIterator = fileTable.iterator()) {
         fileIterator.seek(bucketPrefix);
         while (fileIterator.hasNext()) {
           Table.KeyValue<String, OmKeyInfo> fileEntry = fileIterator.next();
@@ -415,10 +425,10 @@ public class FSORepairTool extends RepairTool {
 
           OmKeyInfo fileInfo = fileEntry.getValue();
           if (!isReachable(fileKey)) {
-            if (!isUnreachable(fileKey)) {
-              unreferencedStats.addFile(fileInfo.getDataSize());
+            if (!isPendingDelete(fileKey)) {
+              orphanedStats.addFile(fileInfo.getDataSize());
 
-              info("Deleting unreferenced file " + fileKey);
+              info("Deleting orphaned file " + fileKey);
               if (!isDryRun()) {
                 markFileForDeletion(bucket, fileKey, fileInfo);
               }
@@ -473,8 +483,8 @@ public class FSORepairTool extends RepairTool {
 
       Collection<String> childDirs = new ArrayList<>();
 
-      try (TableIterator<String, ? extends Table.KeyValue<String, OmDirectoryInfo>>
-               dirIterator = directoryTable.iterator()) {
+      try (TableIterator<String, ? extends Table.KeyValue<String, OmDirectoryInfo>> dirIterator = directoryTable
+          .iterator()) {
         String dirPrefix = buildReachableKey(volume, bucket, currentDir);
         // Start searching the directory table at the current directory's
         // prefix to get its immediate children.
@@ -497,12 +507,12 @@ public class FSORepairTool extends RepairTool {
       return childDirs;
     }
 
-    private Collection<String> getChildDirectoriesAndMarkAsUnreachable(String dirPrefix) throws IOException {
+    private Collection<String> getChildDirectoriesAndMarkAsPendingDelete(String dirPrefix) throws IOException {
       Collection<String> childDirs = new ArrayList<>();
 
-      // Find child directories and mark them as unreachable
-      try (TableIterator<String, ? extends Table.KeyValue<String, OmDirectoryInfo>>
-               dirIterator = directoryTable.iterator()) {
+      // Find child directories and mark them as pending delete
+      try (TableIterator<String, ? extends Table.KeyValue<String, OmDirectoryInfo>> dirIterator = directoryTable
+          .iterator()) {
         // Start searching the directory table at the current directory's
         // prefix to get its immediate children.
         dirIterator.seek(dirPrefix);
@@ -517,16 +527,15 @@ public class FSORepairTool extends RepairTool {
           // Ensure this is an immediate child, not a deeper descendant
           String relativePath = childDirKey.substring(dirPrefix.length());
           if (!relativePath.contains(OM_KEY_PREFIX)) {
-            addUnreachableEntry(childDirKey);
+            addPendingDeleteEntry(childDirKey);
             childDirs.add(childDirKey);
-            unreachableStats.addDir();
+            pendingDeleteStats.addDir();
           }
         }
       }
 
-      // Find child files and mark them as unreachable
-      try (TableIterator<String, ? extends Table.KeyValue<String, OmKeyInfo>> fileIterator =
-               fileTable.iterator()) {
+      // Find child files and mark them as pending delete
+      try (TableIterator<String, ? extends Table.KeyValue<String, OmKeyInfo>> fileIterator = fileTable.iterator()) {
         fileIterator.seek(dirPrefix);
         while (fileIterator.hasNext()) {
           Table.KeyValue<String, OmKeyInfo> childFileEntry = fileIterator.next();
@@ -539,8 +548,8 @@ public class FSORepairTool extends RepairTool {
           // Ensure this is an immediate child, not a deeper descendant
           String relativePath = childFileKey.substring(dirPrefix.length());
           if (!relativePath.contains(OM_KEY_PREFIX)) {
-            addUnreachableEntry(childFileKey);
-            unreachableStats.addFile(childFileEntry.getValue().getDataSize());
+            addPendingDeleteEntry(childFileKey);
+            pendingDeleteStats.addFile(childFileEntry.getValue().getDataSize());
           }
         }
       }
@@ -559,12 +568,12 @@ public class FSORepairTool extends RepairTool {
     }
 
     /**
-     * Add the specified object to the unreachable table, indicating it is part
+     * Add the specified object to the pending delete table, indicating it is part
      * of the disconnected FSO tree.
      */
-    private void addUnreachableEntry(String originalKey) throws IOException {
+    private void addPendingDeleteEntry(String originalKey) throws IOException {
       // No value is needed for this table.
-      unreachableTable.put(originalKey, EMPTY_BYTE_ARRAY);
+      pendingDeleteTable.put(originalKey, EMPTY_BYTE_ARRAY);
     }
 
     /**
@@ -579,10 +588,10 @@ public class FSORepairTool extends RepairTool {
 
     /**
      * @param fileOrDirKey The key of a file or directory in RocksDB.
-     * @return true if the entry itself is in the unreachable table.
+     * @return true if the entry itself is in the pending delete table.
      */
-    protected boolean isUnreachable(String fileOrDirKey) throws IOException {
-      return unreachableTable.get(fileOrDirKey) != null;
+    protected boolean isPendingDelete(String fileOrDirKey) throws IOException {
+      return pendingDeleteTable.get(fileOrDirKey) != null;
     }
 
     private void openTempDB() throws IOException {
@@ -598,10 +607,10 @@ public class FSORepairTool extends RepairTool {
           .setName("temp.db")
           .setPath(tempDBFile.getParentFile().toPath())
           .addTable(REACHABLE_TABLE)
-          .addTable(UNREACHABLE_TABLE)
+          .addTable(PENDING_DELETE_TABLE)
           .build();
       reachableTable = tempDB.getTable(REACHABLE_TABLE, StringCodec.get(), ByteArrayCodec.get());
-      unreachableTable = tempDB.getTable(UNREACHABLE_TABLE, StringCodec.get(), ByteArrayCodec.get());
+      pendingDeleteTable = tempDB.getTable(PENDING_DELETE_TABLE, StringCodec.get(), ByteArrayCodec.get());
     }
 
     private void closeTempDB() throws IOException {
@@ -621,8 +630,24 @@ public class FSORepairTool extends RepairTool {
       throw new IOException(String.format("Specified OM DB instance %s does " +
           "not exist or is not a RocksDB directory.", dbPath));
     }
-    // Load RocksDB and tables needed.
-    return OmMetadataManagerImpl.loadDB(new OzoneConfiguration(), new File(dbPath).getParentFile(), -1);
+
+    // The provided path should point to the OM DB directory (e.g., /path/to/om.db
+    // or /path/to/om-db-backup)
+    // We need to extract:
+    // - parentDir: the parent directory (e.g., /path/to)
+    // - dbName: the database directory name (e.g., "om.db" or "om-db-backup")
+
+    File parentDir = omDBFile.getParentFile();
+    String dbName = omDBFile.getName();
+
+    // Load RocksDB and tables needed using the correct database name
+    return DBStoreBuilder.newBuilder(new OzoneConfiguration(), OMDBDefinition.get(), dbName, parentDir.toPath())
+        .setOpenReadOnly(false)
+        .setEnableCompactionDag(true)
+        .setCreateCheckpointDirs(true)
+        .setEnableRocksDbMetrics(true)
+        .setMaxNumberOfOpenFiles(-1)
+        .build();
   }
 
   /**
@@ -664,46 +689,46 @@ public class FSORepairTool extends RepairTool {
    */
   public static class Report {
     private final ReportStatistics reachable;
-    private final ReportStatistics unreachable;
-    private final ReportStatistics unreferenced;
+    private final ReportStatistics pendingDelete;
+    private final ReportStatistics orphaned;
 
     /**
      * Builds one report that is the aggregate of multiple others.
      */
     public Report(Report... reports) {
       reachable = new ReportStatistics();
-      unreachable = new ReportStatistics();
-      unreferenced = new ReportStatistics();
+      pendingDelete = new ReportStatistics();
+      orphaned = new ReportStatistics();
 
       for (Report report : reports) {
         reachable.add(report.reachable);
-        unreachable.add(report.unreachable);
-        unreferenced.add(report.unreferenced);
+        pendingDelete.add(report.pendingDelete);
+        orphaned.add(report.orphaned);
       }
     }
 
     private Report(Report.Builder builder) {
       this.reachable = builder.reachable;
-      this.unreachable = builder.unreachable;
-      this.unreferenced = builder.unreferenced;
+      this.pendingDelete = builder.pendingDelete;
+      this.orphaned = builder.orphaned;
     }
 
     public ReportStatistics getReachable() {
       return reachable;
     }
 
-    public ReportStatistics getUnreachable() {
-      return unreachable;
+    public ReportStatistics getPendingDelete() {
+      return pendingDelete;
     }
 
-    public ReportStatistics getUnreferenced() {
-      return unreferenced;
+    public ReportStatistics getOrphaned() {
+      return orphaned;
     }
 
     @Override
     public String toString() {
-      return "Reachable:" + reachable + "\nUnreachable (Pending to delete):" + unreachable +
-          "\nUnreferenced (Orphaned):" + unreferenced;
+      return "Reachable:" + reachable + "\nUnreachable (Pending to delete):" + pendingDelete +
+          "\nUnreferenced (Orphaned):" + orphaned;
     }
 
     @Override
@@ -719,13 +744,13 @@ public class FSORepairTool extends RepairTool {
       // Useful for testing.
       System.out.println("Comparing reports\nExpect:\n" + this + "\nActual:\n" + report);
 
-      return reachable.equals(report.reachable) && unreachable.equals(report.unreachable) &&
-             unreferenced.equals(report.unreferenced);
+      return reachable.equals(report.reachable) && pendingDelete.equals(report.pendingDelete) &&
+          orphaned.equals(report.orphaned);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(reachable, unreachable, unreferenced);
+      return Objects.hash(reachable, pendingDelete, orphaned);
     }
 
     /**
@@ -733,8 +758,8 @@ public class FSORepairTool extends RepairTool {
      */
     public static final class Builder {
       private ReportStatistics reachable = new ReportStatistics();
-      private ReportStatistics unreachable = new ReportStatistics();
-      private ReportStatistics unreferenced = new ReportStatistics();
+      private ReportStatistics pendingDelete = new ReportStatistics();
+      private ReportStatistics orphaned = new ReportStatistics();
 
       public Builder() {
       }
@@ -744,13 +769,13 @@ public class FSORepairTool extends RepairTool {
         return this;
       }
 
-      public Builder setUnreachable(ReportStatistics unreachable) {
-        this.unreachable = unreachable;
+      public Builder setPendingDelete(ReportStatistics pendingDelete) {
+        this.pendingDelete = pendingDelete;
         return this;
       }
 
-      public Builder setUnreferenced(ReportStatistics unreferenced) {
-        this.unreferenced = unreferenced;
+      public Builder setOrphaned(ReportStatistics orphaned) {
+        this.orphaned = orphaned;
         return this;
       }
 
@@ -763,6 +788,7 @@ public class FSORepairTool extends RepairTool {
   /**
    * Represents the statistics of reachable and unreachable data.
    * This gives the count of dirs, files and bytes.
+   * Note: "Unreachable" data refers to items pending deletion.
    */
 
   public static class ReportStatistics {
@@ -770,7 +796,8 @@ public class FSORepairTool extends RepairTool {
     private long files;
     private long bytes;
 
-    public ReportStatistics() { }
+    public ReportStatistics() {
+    }
 
     public ReportStatistics(long dirs, long files, long bytes) {
       this.dirs = dirs;
@@ -799,8 +826,8 @@ public class FSORepairTool extends RepairTool {
     @Override
     public String toString() {
       return "\n\tDirectories: " + dirs +
-              "\n\tFiles: " + files +
-              "\n\tBytes: " + bytes;
+          "\n\tFiles: " + files +
+          "\n\tBytes: " + bytes;
     }
 
     @Override
