@@ -19,18 +19,18 @@ package org.apache.hadoop.ozone.om.checkpoint;
 
 import org.apache.hadoop.hdds.ExitManager;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
+import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ozone.om.KeyManager;
 import org.apache.hadoop.ozone.om.OMMetadataManager;
 import org.apache.hadoop.ozone.om.OmSnapshotManager;
 import org.apache.hadoop.ozone.om.ratis.OzoneManagerRatisServer;
-import org.apache.hadoop.ipc.RPC;
 
 /**
  * Context object that encapsulates all dependencies needed for checkpoint
  * installation. This follows the Context Object Pattern to avoid passing
  * too many parameters and to centralize dependency management.
  */
-public class OMCheckpointInstallContext {
+public final class OMCheckpointInstallContext {
   private final OMMetadataManager metadataManager;
   private final KeyManager keyManager;
   private final OmSnapshotManager omSnapshotManager;
@@ -83,6 +83,9 @@ public class OMCheckpointInstallContext {
     return serviceLifecycleManager;
   }
 
+  /**
+   * Builder for creating OMCheckpointInstallContext instances.
+   */
   public static class Builder {
     private OMMetadataManager metadataManager;
     private KeyManager keyManager;

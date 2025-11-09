@@ -17,6 +17,9 @@
 
 package org.apache.hadoop.ozone.om.checkpoint;
 
+import java.io.File;
+import java.nio.file.Path;
+
 import org.apache.hadoop.hdds.utils.TransactionInfo;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ozone.om.ratis.utils.OzoneManagerRatisUtils;
@@ -24,9 +27,6 @@ import org.apache.ratis.server.protocol.TermIndex;
 import org.apache.ratis.util.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.File;
-import java.nio.file.Path;
 
 /**
  * Responsible for executing checkpoint installation logic.

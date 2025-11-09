@@ -1855,7 +1855,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
 
     metadataManager.start(configuration);
 
-    startSecretManagerIfNecessary();
+    try {
+      startSecretManagerIfNecessary();
+    } catch (Exception e) {
+      throw new IOException("Failed to start secret manager", e);
+    }
     // Start Ratis services
     if (omRatisServer != null) {
       omRatisServer.start();
@@ -1914,7 +1918,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     omRpcServer.start();
     isOmRpcServerRunning = true;
 
-      startTrashEmptierInternal(configuration);
+    startTrashEmptierInternal(configuration);
     if (isOmGrpcServerEnabled) {
       omS3gGrpcServer.start();
       isOmGrpcServerRunning = true;
@@ -1950,7 +1954,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
 
     metadataManager.start(configuration);
     keyManager.start(configuration);
-    startSecretManagerIfNecessary();
+    try {
+      startSecretManagerIfNecessary();
+    } catch (Exception e) {
+      throw new IOException("Failed to start secret manager", e);
+    }
 
     // Set metrics and start metrics back ground thread
     metrics.setNumVolumes(metadataManager.countRowsInTable(metadataManager
@@ -1995,7 +2003,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     omRpcServer.start();
     isOmRpcServerRunning = true;
 
-      startTrashEmptierInternal(configuration);
+    startTrashEmptierInternal(configuration);
     registerMXBean();
 
     if (isOmGrpcServerEnabled) {
@@ -4113,7 +4121,6 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
         checkpointTrxnInfo);
   }
 
-
   private void buildDBCheckpointInstallAuditLog(String leaderId, long term, long lastAppliedIndex) {
     Map<String, String> auditMap = new LinkedHashMap<>();
     auditMap.put(AUDIT_PARAM_LEADER_ID, leaderId);
@@ -4173,7 +4180,6 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
   public void reloadOMState() throws IOException {
     reloadOMStateInternal();
   }
-
 
   @Override
   public RPC.Server createNewRpcServer(OzoneConfiguration conf)
@@ -4296,8 +4302,12 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     // Restart required services
     metadataManager.start(configuration);
     keyManager.start(configuration);
-    startSecretManagerIfNecessary();
-      startTrashEmptierInternal(configuration);
+    try {
+      startSecretManagerIfNecessary();
+    } catch (Exception e) {
+      throw new IOException("Failed to start secret manager", e);
+    }
+    startTrashEmptierInternal(configuration);
 
     // Set metrics and start metrics background thread
     metrics.setNumVolumes(metadataManager.countRowsInTable(metadataManager
