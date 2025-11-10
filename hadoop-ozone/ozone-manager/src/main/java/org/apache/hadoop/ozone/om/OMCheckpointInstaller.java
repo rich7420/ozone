@@ -160,7 +160,7 @@ public class OMCheckpointInstaller {
       if (oldOmMetadataManagerStopped) {
         time = monotonicNow();
         om.reloadOMState();
-        om.setTransactionInfo(TransactionInfo.valueOf(termIndex));
+        om.setTransactionInfo(TransactionInfo.valueOf(term, lastAppliedIndex));
         omRatisServer.getOmStateMachine().unpause(lastAppliedIndex, term);
         newMetadataManagerStarted = true;
         LOG.info("Reloaded OM state with Term: {} and Index: {}. Spend {} ms",
