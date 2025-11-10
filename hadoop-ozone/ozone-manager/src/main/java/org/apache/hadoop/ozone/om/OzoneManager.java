@@ -1050,11 +1050,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
           upgradeFinalizer.finalizeAndWaitForCompletion(
               "om-ratis-snapshot", this,
               config.getRatisBasedFinalizationTimeout());
-        if (versionManager.getMetadataLayoutVersion() < layoutVersionInDB) {
-          throw new IOException("Unable to finalize OM to the desired layout " +
-              "version " + layoutVersionInDB + " present in the snapshot DB.");
-        } else {
-          updateLayoutVersionInDB(versionManager, metadataManager);
+          if (versionManager.getMetadataLayoutVersion() < layoutVersionInDB) {
+            throw new IOException("Unable to finalize OM to the desired layout " +
+                "version " + layoutVersionInDB + " present in the snapshot DB.");
+          } else {
+            updateLayoutVersionInDB(versionManager, metadataManager);
           }
         } else if (versionManager.getMetadataLayoutVersion() != layoutVersionInDB) {
           // This should not happen, but if it does, log a warning
@@ -1876,7 +1876,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
 
     try {
-    startSecretManagerIfNecessary();
+      startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
@@ -1975,7 +1975,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
     keyManager.start(configuration);
     try {
-    startSecretManagerIfNecessary();
+      startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
@@ -4325,7 +4325,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
     keyManager.start(configuration);
     try {
-      startSecretManagerIfNecessary();
+    startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
