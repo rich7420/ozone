@@ -4317,23 +4317,9 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
    * with the new MetadataManager instance.
    */
   private void reloadOMStateInternal() throws IOException {
+    // instantiateServices(true) will synchronize omStorage layout version
+    // with DB layout version, so no need to do it again here
     instantiateServices(true);
-
-    // Ensure omStorage layout version is synchronized with DB layout version
-    // This is important for checkpoint installation to work correctly
-    Integer layoutVersionInDB = getLayoutVersionInDB();
-    if (layoutVersionInDB != null &&
-        omStorage.getLayoutVersion() != layoutVersionInDB) {
-      LOG.info("Updating omStorage layout version from {} to {} to match " +
-          "the layout version in DB.", omStorage.getLayoutVersion(),
-          layoutVersionInDB);
-      omStorage.setLayoutVersion(layoutVersionInDB);
-      try {
-        omStorage.persistCurrentState();
-      } catch (IOException e) {
-        LOG.warn("Failed to persist omStorage layout version update", e);
-      }
-    }
 
     // Restart required services
     metadataManager.start(configuration);
