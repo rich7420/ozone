@@ -1876,7 +1876,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
 
     try {
-    startSecretManagerIfNecessary();
+      startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
@@ -1975,7 +1975,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
     keyManager.start(configuration);
     try {
-    startSecretManagerIfNecessary();
+      startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
@@ -4339,7 +4339,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
     keyManager.start(configuration);
     try {
-    startSecretManagerIfNecessary();
+      startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
