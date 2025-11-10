@@ -1042,19 +1042,39 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
 
     if (withNewSnapshot) {
       Integer layoutVersionInDB = getLayoutVersionInDB();
-      if (layoutVersionInDB != null &&
-          versionManager.getMetadataLayoutVersion() < layoutVersionInDB) {
-        LOG.info("New OM snapshot received with higher layout version {}. " +
-            "Attempting to finalize current OM to that version.",
-            layoutVersionInDB);
-        upgradeFinalizer.finalizeAndWaitForCompletion(
-            "om-ratis-snapshot", this,
-            config.getRatisBasedFinalizationTimeout());
+      if (layoutVersionInDB != null) {
         if (versionManager.getMetadataLayoutVersion() < layoutVersionInDB) {
-          throw new IOException("Unable to finalize OM to the desired layout " +
-              "version " + layoutVersionInDB + " present in the snapshot DB.");
-        } else {
-          updateLayoutVersionInDB(versionManager, metadataManager);
+          LOG.info("New OM snapshot received with higher layout version {}. " +
+              "Attempting to finalize current OM to that version.",
+              layoutVersionInDB);
+          upgradeFinalizer.finalizeAndWaitForCompletion(
+              "om-ratis-snapshot", this,
+              config.getRatisBasedFinalizationTimeout());
+          if (versionManager.getMetadataLayoutVersion() < layoutVersionInDB) {
+            throw new IOException("Unable to finalize OM to the desired layout " +
+                "version " + layoutVersionInDB + " present in the snapshot DB.");
+          } else {
+            updateLayoutVersionInDB(versionManager, metadataManager);
+          }
+        } else if (versionManager.getMetadataLayoutVersion() != layoutVersionInDB) {
+          // This should not happen, but if it does, log a warning
+          LOG.warn("VersionManager has layout version {} which differs from " +
+              "the layout version {} in the snapshot DB. This may indicate " +
+              "an issue with checkpoint installation.",
+              versionManager.getMetadataLayoutVersion(), layoutVersionInDB);
+        }
+        // If layoutVersionInDB equals versionManager.getMetadataLayoutVersion(),
+        // ensure omStorage is also synchronized (may be needed for future checks)
+        if (omStorage.getLayoutVersion() != layoutVersionInDB) {
+          LOG.info("Synchronizing omStorage layout version from {} to {} to " +
+              "match DB layout version.", omStorage.getLayoutVersion(),
+              layoutVersionInDB);
+          omStorage.setLayoutVersion(layoutVersionInDB);
+          try {
+            omStorage.persistCurrentState();
+          } catch (IOException e) {
+            LOG.warn("Failed to persist omStorage layout version update", e);
+          }
         }
       }
 
@@ -1856,7 +1876,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
 
     try {
-      startSecretManagerIfNecessary();
+    startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
@@ -1955,7 +1975,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     metadataManager.start(configuration);
     keyManager.start(configuration);
     try {
-      startSecretManagerIfNecessary();
+    startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
@@ -4299,11 +4319,27 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
   private void reloadOMStateInternal() throws IOException {
     instantiateServices(true);
 
+    // Ensure omStorage layout version is synchronized with DB layout version
+    // This is important for checkpoint installation to work correctly
+    Integer layoutVersionInDB = getLayoutVersionInDB();
+    if (layoutVersionInDB != null &&
+        omStorage.getLayoutVersion() != layoutVersionInDB) {
+      LOG.info("Updating omStorage layout version from {} to {} to match " +
+          "the layout version in DB.", omStorage.getLayoutVersion(),
+          layoutVersionInDB);
+      omStorage.setLayoutVersion(layoutVersionInDB);
+      try {
+        omStorage.persistCurrentState();
+      } catch (IOException e) {
+        LOG.warn("Failed to persist omStorage layout version update", e);
+      }
+    }
+
     // Restart required services
     metadataManager.start(configuration);
     keyManager.start(configuration);
     try {
-      startSecretManagerIfNecessary();
+    startSecretManagerIfNecessary();
     } catch (Exception e) {
       throw new IOException("Failed to start secret manager", e);
     }
