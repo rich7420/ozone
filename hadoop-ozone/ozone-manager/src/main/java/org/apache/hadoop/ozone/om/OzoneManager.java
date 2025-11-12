@@ -1014,10 +1014,9 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     // Snapshot metrics
     updateActiveSnapshotMetrics();
 
-    // Initialize checkpoint installer if not already initialized
-    if (checkpointInstaller == null) {
-      initializeCheckpointInstaller();
-    }
+    // Initialize or re-initialize checkpoint installer with updated dependencies
+    // This is necessary when reloading OM state after checkpoint installation
+    initializeCheckpointInstaller();
 
     if (withNewSnapshot) {
       Integer layoutVersionInDB = getLayoutVersionInDB();
