@@ -1973,6 +1973,17 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
       omRatisServer.start();
     }
 
+    // After Ratis server starts, check if layout version needs to be synced
+    // This handles the case where a snapshot was installed before restart
+    Integer layoutVersionInDB = getLayoutVersionInDB();
+    if (layoutVersionInDB != null &&
+        versionManager.getMetadataLayoutVersion() < layoutVersionInDB) {
+      LOG.info("OM restart detected layout version mismatch. DB version: {}, " +
+              "versionManager version: {}. Syncing versionManager.",
+          layoutVersionInDB, versionManager.getMetadataLayoutVersion());
+      syncLayoutVersionAfterCheckpoint();
+    }
+
     omRpcServer = getRpcServer(configuration);
     if (isOmGrpcServerEnabled) {
       omS3gGrpcServer = getOmS3gGrpcServer(configuration);
@@ -4997,18 +5008,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
             OMLayoutFeature feature = (OMLayoutFeature) versionManager.getFeature(v);
             if (feature != null) {
               versionManager.finalized(feature);
-            } else {
-              LOG.warn("Feature for layout version {} is not found. This may " +
-                      "indicate a software version mismatch.", v);
             }
-          }
-          // Verify that version synchronization was successful
-          int finalVersion = versionManager.getMetadataLayoutVersion();
-          if (finalVersion < layoutVersionInDB) {
-            throw new IOException("Unable to sync versionManager to layout " +
-                    "version " + layoutVersionInDB + ". Current version is " +
-                    finalVersion + ". This may indicate a software version " +
-                    "mismatch or missing features.");
           }
           updateLayoutVersionInDB(versionManager, metadataManager);
         } else if (postFinalizationVersion == layoutVersionInDB) {
