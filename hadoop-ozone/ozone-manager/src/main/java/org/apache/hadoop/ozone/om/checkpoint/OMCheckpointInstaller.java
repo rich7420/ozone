@@ -98,7 +98,8 @@ public class OMCheckpointInstaller {
           session);
 
       // Phase 5: Restart services
-      restartServices(termIndex, session);
+      // Note: Don't pass termIndex here, as session now has updated values
+      restartServices(session);
 
       // Phase 6: Cleanup
       cleanup(leaderId, session);
@@ -194,6 +195,7 @@ public class OMCheckpointInstaller {
 
     // Stop RPC server before stopping metadataManager
     context.getOmRpcServer().stop();
+    serviceManager.setOmRpcServerRunning(false);
     session.markCompleted(
         CheckpointInstallSession.InstallationPhase.RPC_SERVER_STOPPED);
     LOG.info("RPC server is stopped. Spend {} ms.",
@@ -253,8 +255,7 @@ public class OMCheckpointInstaller {
   /**
    * Phase 5: Restart services and reload state.
    */
-  private void restartServices(TermIndex termIndex,
-                                CheckpointInstallSession session)
+  private void restartServices(CheckpointInstallSession session)
       throws Exception {
     // Close snapDiff's rocksDB instance only if metadataManager was closed
     if (session.isMetadataManagerStopped()) {
@@ -268,8 +269,9 @@ public class OMCheckpointInstaller {
       if (session.isMetadataManagerStopped()) {
         // Reload the OM DB store with the new checkpoint
         serviceManager.reloadOMState();
+        // Use the updated term and index from checkpoint, not the old termIndex
         serviceManager.setTransactionInfo(
-            TransactionInfo.valueOf(termIndex));
+            TransactionInfo.valueOf(session.getTerm(), session.getLastAppliedIndex()));
         serviceManager.getRatisServer().getOmStateMachine().unpause(
             session.getLastAppliedIndex(), session.getTerm());
 
@@ -301,6 +303,7 @@ public class OMCheckpointInstaller {
         RPC.Server newRpcServer = serviceManager.createNewRpcServer(
             context.getConfiguration());
         newRpcServer.start();
+        serviceManager.setOmRpcServerRunning(true);
         session.markCompleted(
             CheckpointInstallSession.InstallationPhase.RPC_SERVER_RESTARTED);
         LOG.info("RPC server is re-started. Spend {} ms.",

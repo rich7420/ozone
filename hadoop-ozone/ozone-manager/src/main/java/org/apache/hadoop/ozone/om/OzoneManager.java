@@ -4211,6 +4211,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
   }
 
   @Override
+  public void setOmRpcServerRunning(boolean running) {
+    this.isOmRpcServerRunning = running;
+  }
+
+  @Override
   public void logCheckpointInstallAudit(String leaderId, long term,
       long index) {
     buildDBCheckpointInstallAuditLog(leaderId, term, index);
@@ -4320,6 +4325,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     // instantiateServices(true) will synchronize omStorage layout version
     // with DB layout version, so no need to do it again here
     instantiateServices(true);
+
+    // Re-initialize checkpoint installer with updated dependencies
+    // This is necessary because metadataManager and omSnapshotManager
+    // have been recreated, and checkpointInstaller's context holds stale references
+    initializeCheckpointInstaller();
 
     // Restart required services
     metadataManager.start(configuration);

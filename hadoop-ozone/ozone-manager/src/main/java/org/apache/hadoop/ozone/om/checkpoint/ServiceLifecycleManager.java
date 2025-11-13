@@ -88,6 +88,12 @@ public interface ServiceLifecycleManager {
   RPC.Server createNewRpcServer(OzoneConfiguration conf) throws IOException;
 
   /**
+   * Set the RPC server running status.
+   * @param running true if RPC server is running, false otherwise
+   */
+  void setOmRpcServerRunning(boolean running);
+
+  /**
    * Log checkpoint installation audit information.
    * @param leaderId leader OM ID
    * @param term term number
