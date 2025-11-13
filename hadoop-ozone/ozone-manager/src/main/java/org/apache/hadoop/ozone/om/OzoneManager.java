@@ -1041,60 +1041,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     updateActiveSnapshotMetrics();
 
     if (withNewSnapshot) {
-      Integer layoutVersionInDB = getLayoutVersionInDB();
-      if (layoutVersionInDB != null) {
-        int currentVersion = versionManager.getMetadataLayoutVersion();
-        if (currentVersion < layoutVersionInDB) {
-          LOG.info("New OM snapshot received with higher layout version {}. " +
-                  "Attempting to finalize current OM to that version.",
-                  layoutVersionInDB);
-          upgradeFinalizer.finalizeAndWaitForCompletion(
-                  "om-ratis-snapshot", this,
-                  config.getRatisBasedFinalizationTimeout());
-          // After finalization, sync versionManager if it still doesn't match
-          int postFinalizationVersion = versionManager.getMetadataLayoutVersion();
-          if (postFinalizationVersion < layoutVersionInDB) {
-            // Finalization may not have completed all features, sync directly
-            LOG.info("Syncing versionManager from {} to {} after checkpoint " +
-                    "installation.", postFinalizationVersion, layoutVersionInDB);
-            for (int v = postFinalizationVersion + 1; v <= layoutVersionInDB; v++) {
-              OMLayoutFeature feature = (OMLayoutFeature) versionManager.getFeature(v);
-              if (feature != null) {
-                versionManager.finalized(feature);
-              }
-            }
-            updateLayoutVersionInDB(versionManager, metadataManager);
-          } else if (postFinalizationVersion == layoutVersionInDB) {
-            updateLayoutVersionInDB(versionManager, metadataManager);
-          } else {
-            throw new IOException("Unable to finalize OM to the desired layout " +
-              "version " + layoutVersionInDB + " present in the snapshot DB. " +
-              "VersionManager is at " + postFinalizationVersion);
-          }
-        } else if (currentVersion > layoutVersionInDB) {
-          // This should not happen, but if it does, log a warning
-          LOG.warn("VersionManager has layout version {} which is higher than " +
-              "the layout version {} in the snapshot DB. This may indicate " +
-              "an issue with checkpoint installation.",
-              currentVersion, layoutVersionInDB);
-        } else if (currentVersion == layoutVersionInDB && currentVersion > 0) {
-          // Both are equal and non-zero - ensure DB is updated
-          updateLayoutVersionInDB(versionManager, metadataManager);
-        }
-        // Ensure omStorage is synchronized with DB layout version
-        if (omStorage.getLayoutVersion() != layoutVersionInDB) {
-          LOG.info("Synchronizing omStorage layout version from {} to {} to " +
-              "match DB layout version.", omStorage.getLayoutVersion(),
-              layoutVersionInDB);
-          omStorage.setLayoutVersion(layoutVersionInDB);
-          try {
-            omStorage.persistCurrentState();
-          } catch (IOException e) {
-            LOG.warn("Failed to persist omStorage layout version update", e);
-          }
-        }
-      }
-
+      syncLayoutVersionAfterCheckpoint();
       instantiatePrepareStateAfterSnapshot();
     } else {
       // Prepare state depends on the transaction ID of metadataManager after a
@@ -5023,6 +4970,66 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
       throws IOException {
     omMetadataManager.getMetaTable().put(LAYOUT_VERSION_KEY,
         String.valueOf(lvm.getMetadataLayoutVersion()));
+  }
+
+  /**
+   * Synchronize layout version after checkpoint installation.
+   * This ensures versionManager matches the layout version in the DB.
+   */
+  private void syncLayoutVersionAfterCheckpoint() throws IOException {
+    Integer layoutVersionInDB = getLayoutVersionInDB();
+    if (layoutVersionInDB != null) {
+      int currentVersion = versionManager.getMetadataLayoutVersion();
+      if (currentVersion < layoutVersionInDB) {
+        LOG.info("New OM snapshot received with higher layout version {}. " +
+                "Attempting to finalize current OM to that version.",
+                layoutVersionInDB);
+        upgradeFinalizer.finalizeAndWaitForCompletion(
+                "om-ratis-snapshot", this,
+                config.getRatisBasedFinalizationTimeout());
+        // After finalization, sync versionManager if it still doesn't match
+        int postFinalizationVersion = versionManager.getMetadataLayoutVersion();
+        if (postFinalizationVersion < layoutVersionInDB) {
+          // Finalization may not have completed all features, sync directly
+          LOG.info("Syncing versionManager from {} to {} after checkpoint " +
+                  "installation.", postFinalizationVersion, layoutVersionInDB);
+          for (int v = postFinalizationVersion + 1; v <= layoutVersionInDB; v++) {
+            OMLayoutFeature feature = (OMLayoutFeature) versionManager.getFeature(v);
+            if (feature != null) {
+              versionManager.finalized(feature);
+            }
+          }
+          updateLayoutVersionInDB(versionManager, metadataManager);
+        } else if (postFinalizationVersion == layoutVersionInDB) {
+          updateLayoutVersionInDB(versionManager, metadataManager);
+        } else {
+          throw new IOException("Unable to finalize OM to the desired layout " +
+            "version " + layoutVersionInDB + " present in the snapshot DB. " +
+            "VersionManager is at " + postFinalizationVersion);
+        }
+      } else if (currentVersion > layoutVersionInDB) {
+        // This should not happen, but if it does, log a warning
+        LOG.warn("VersionManager has layout version {} which is higher than " +
+            "the layout version {} in the snapshot DB. This may indicate " +
+            "an issue with checkpoint installation.",
+            currentVersion, layoutVersionInDB);
+      } else if (currentVersion == layoutVersionInDB && currentVersion > 0) {
+        // Both are equal and non-zero - ensure DB is updated
+        updateLayoutVersionInDB(versionManager, metadataManager);
+      }
+      // Ensure omStorage is synchronized with DB layout version
+      if (omStorage.getLayoutVersion() != layoutVersionInDB) {
+        LOG.info("Synchronizing omStorage layout version from {} to {} to " +
+            "match DB layout version.", omStorage.getLayoutVersion(),
+            layoutVersionInDB);
+        omStorage.setLayoutVersion(layoutVersionInDB);
+        try {
+          omStorage.persistCurrentState();
+        } catch (IOException e) {
+          LOG.warn("Failed to persist omStorage layout version update", e);
+        }
+      }
+    }
   }
 
   private BucketLayout getBucketLayout() {
