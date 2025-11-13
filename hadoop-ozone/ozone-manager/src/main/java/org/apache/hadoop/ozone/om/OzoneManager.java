@@ -4997,7 +4997,18 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
             OMLayoutFeature feature = (OMLayoutFeature) versionManager.getFeature(v);
             if (feature != null) {
               versionManager.finalized(feature);
+            } else {
+              LOG.warn("Feature for layout version {} is not found. This may " +
+                      "indicate a software version mismatch.", v);
             }
+          }
+          // Verify that version synchronization was successful
+          int finalVersion = versionManager.getMetadataLayoutVersion();
+          if (finalVersion < layoutVersionInDB) {
+            throw new IOException("Unable to sync versionManager to layout " +
+                    "version " + layoutVersionInDB + ". Current version is " +
+                    finalVersion + ". This may indicate a software version " +
+                    "mismatch or missing features.");
           }
           updateLayoutVersionInDB(versionManager, metadataManager);
         } else if (postFinalizationVersion == layoutVersionInDB) {
