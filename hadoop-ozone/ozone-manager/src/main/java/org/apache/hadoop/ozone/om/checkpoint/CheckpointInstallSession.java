@@ -20,6 +20,7 @@ package org.apache.hadoop.ozone.om.checkpoint;
 import java.io.File;
 import java.util.EnumSet;
 import java.util.Set;
+import org.apache.ratis.server.protocol.TermIndex;
 
 /**
  * Tracks the state of a single checkpoint installation session.
@@ -37,6 +38,7 @@ public class CheckpointInstallSession {
 
   private long term;
   private long lastAppliedIndex;
+  private TermIndex oldTermIndex;
 
   /**
    * Enum representing different phases of checkpoint installation.
@@ -110,6 +112,14 @@ public class CheckpointInstallSession {
 
   public boolean isStateReloaded() {
     return hasCompleted(InstallationPhase.STATE_RELOADED);
+  }
+
+  public TermIndex getOldTermIndex() {
+    return oldTermIndex;
+  }
+
+  public void setOldTermIndex(TermIndex oldTermIndex) {
+    this.oldTermIndex = oldTermIndex;
   }
 }
 

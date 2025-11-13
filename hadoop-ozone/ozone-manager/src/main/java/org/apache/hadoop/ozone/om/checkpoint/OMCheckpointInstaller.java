@@ -75,12 +75,13 @@ public class OMCheckpointInstaller {
       prepareForInstallation(session);
 
       // Phase 2: Verify checkpoint
-      TermIndex termIndex = serviceManager.getRatisServer()
+      TermIndex oldTermIndex = serviceManager.getRatisServer()
           .getLastAppliedTermIndex();
-      long term = termIndex.getTerm();
-      long lastAppliedIndex = termIndex.getIndex();
+      long term = oldTermIndex.getTerm();
+      long lastAppliedIndex = oldTermIndex.getIndex();
       session.setTerm(term);
       session.setLastAppliedIndex(lastAppliedIndex);
+      session.setOldTermIndex(oldTermIndex);
 
       boolean canProceed = verifyCheckpoint(
           checkpointTrxnInfo, lastAppliedIndex, leaderId,
@@ -269,9 +270,11 @@ public class OMCheckpointInstaller {
       if (session.isMetadataManagerStopped()) {
         // Reload the OM DB store with the new checkpoint
         serviceManager.reloadOMState();
-        // Use the updated term and index from checkpoint, not the old termIndex
+        // Use the OLD termIndex (before DB replacement) to match original behavior
+        // This is the behavior from the original code - using termIndex from before
+        // the checkpoint installation, not the checkpoint's term/index
         serviceManager.setTransactionInfo(
-            TransactionInfo.valueOf(session.getTerm(), session.getLastAppliedIndex()));
+            TransactionInfo.valueOf(session.getOldTermIndex()));
         serviceManager.getRatisServer().getOmStateMachine().unpause(
             session.getLastAppliedIndex(), session.getTerm());
 
