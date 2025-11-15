@@ -2371,6 +2371,7 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     return omTransactionInfo.get();
   }
 
+  @Override
   public void setTransactionInfo(TransactionInfo info) {
     omTransactionInfo.set(info);
   }
@@ -4097,10 +4098,6 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     auditMap.put(AUDIT_PARAM_TERM, String.valueOf(term));
     auditMap.put(AUDIT_PARAM_LAST_APPLIED_INDEX, String.valueOf(lastAppliedIndex));
     SYSTEMAUDIT.logWriteSuccess(buildAuditMessageForSuccess(OMSystemAction.DB_CHECKPOINT_INSTALL, auditMap));
-  }
-
-  private void buildDBCheckpointInstallAuditLog(String leaderId, long term, long lastAppliedIndex) {
-    logCheckpointInstallAudit(leaderId, term, lastAppliedIndex);
   }
 
   @Override
