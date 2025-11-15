@@ -981,7 +981,8 @@ public class TestOMRatisSnapshots {
     String msg = "OM DB is not stopped. Started services with Term: " +
         followerTermIndex.getTerm() + " and Index: " +
         followerTermIndex.getIndex();
-    assertLogCapture(logCapture, msg);
+    // Check both OzoneManager and OMCheckpointInstaller logs for compatibility
+    assertLogCapture(logCapture, checkpointLogCapture, msg);
   }
 
   @Test
@@ -1118,20 +1119,6 @@ public class TestOMRatisSnapshots {
       String output2 = logCapture2 != null ? logCapture2.getOutput() : "";
       boolean found1 = output1.contains(msg);
       boolean found2 = logCapture2 != null && output2.contains(msg);
-      if (!found1 && !found2) {
-        // Debug: print what we're looking for and what we found
-        System.out.println("Looking for: " + msg);
-        System.out.println("LogCapture1 output length: " + output1.length());
-        System.out.println("LogCapture2 output length: " + output2.length());
-        if (output1.length() > 0) {
-          System.out.println("LogCapture1 last 500 chars: " + 
-              output1.substring(Math.max(0, output1.length() - 500)));
-        }
-        if (output2.length() > 0) {
-          System.out.println("LogCapture2 last 500 chars: " + 
-              output2.substring(Math.max(0, output2.length() - 500)));
-        }
-      }
       return found1 || found2;
     }, 100, 30_000);
   }
