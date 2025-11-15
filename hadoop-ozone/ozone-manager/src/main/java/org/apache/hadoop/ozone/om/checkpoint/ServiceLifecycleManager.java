@@ -165,4 +165,30 @@ public interface ServiceLifecycleManager {
   void logCheckpointCannotProceedWarning(
       org.apache.ratis.server.protocol.TermIndex currentTermIndex,
       org.apache.ratis.server.protocol.TermIndex checkpointTermIndex);
+
+  /**
+   * Log when OM state is reloaded from checkpoint.
+   * Ensures logging occurs from OzoneManager for LogCapturer compatibility.
+   */
+  void logReloadedOMState(long term, long lastAppliedIndex, long durationMs);
+
+  /**
+   * Log when metadata operations are restarted without stopping the DB.
+   */
+  void logOmDbNotStopped(long term, long lastAppliedIndex);
+
+  /**
+   * Log when the OM RPC server is stopped.
+   */
+  void logRpcServerStopped(long durationMs);
+
+  /**
+   * Log when metadata manager is stopped.
+   */
+  void logMetadataManagerStopped(long durationMs);
+
+  /**
+   * Log when the OM RPC server is restarted.
+   */
+  void logRpcServerRestarted(long durationMs);
 }

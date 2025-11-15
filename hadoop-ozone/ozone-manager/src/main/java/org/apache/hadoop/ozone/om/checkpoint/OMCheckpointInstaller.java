@@ -286,15 +286,14 @@ public class OMCheckpointInstaller {
       serviceManager.stopRpcServer();
       serviceManager.setOmRpcServerRunning(false);
       omRpcServerStopped = true;
-      LOG.info("RPC server is stopped. Spend " +
-          (Time.monotonicNow() - time) + " ms.");
+      serviceManager.logRpcServerStopped(Time.monotonicNow() - time);
       try {
         // Stop old metadataManager before replacing DB Dir
         time = Time.monotonicNow();
         serviceManager.stopMetadataManager();
         oldOmMetadataManagerStopped = true;
-        LOG.info("metadataManager is stopped. Spend " +
-            (Time.monotonicNow() - time) + " ms.");
+        serviceManager.logMetadataManagerStopped(
+            Time.monotonicNow() - time);
       } catch (Exception e) {
         String errorMsg = "Failed to stop metadataManager. Cannot proceed " +
             "with installing the new checkpoint.";
@@ -344,7 +343,7 @@ public class OMCheckpointInstaller {
         serviceManager.setTransactionInfo(TransactionInfo.valueOf(termIndex));
         serviceManager.getRatisServer().getOmStateMachine()
             .unpause(lastAppliedIndex, term);
-        LOG.info("Reloaded OM state with Term: {} and Index: {}. Spend {} ms",
+        serviceManager.logReloadedOMState(
             term, lastAppliedIndex, Time.monotonicNow() - time);
         return true;
       } else {
@@ -354,8 +353,7 @@ public class OMCheckpointInstaller {
         serviceManager.startTrashEmptier(serviceManager.getConfiguration());
         serviceManager.getRatisServer().getOmStateMachine()
             .unpause(lastAppliedIndex, term);
-        LOG.info("OM DB is not stopped. Started services with Term: {} and " +
-            "Index: {}", term, lastAppliedIndex);
+        serviceManager.logOmDbNotStopped(term, lastAppliedIndex);
         return false;
       }
     } catch (Exception ex) {
@@ -373,8 +371,7 @@ public class OMCheckpointInstaller {
       long time = Time.monotonicNow();
       serviceManager.startRpcServer();
       serviceManager.setOmRpcServerRunning(true);
-      LOG.info("RPC server is re-started. Spend " +
-          (Time.monotonicNow() - time) + " ms.");
+      serviceManager.logRpcServerRestarted(Time.monotonicNow() - time);
     } catch (Exception e) {
       String errorMsg = "Failed to start RPC Server.";
       throw new RuntimeException(errorMsg, e);

@@ -4120,6 +4120,34 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
   }
 
   @Override
+  public void logReloadedOMState(long term, long lastAppliedIndex,
+      long durationMs) {
+    LOG.info("Reloaded OM state with Term: {} and Index: {}. Spend {} ms",
+        term, lastAppliedIndex, durationMs);
+  }
+
+  @Override
+  public void logOmDbNotStopped(long term, long lastAppliedIndex) {
+    LOG.info("OM DB is not stopped. Started services with Term: {} and Index: {}",
+        term, lastAppliedIndex);
+  }
+
+  @Override
+  public void logRpcServerStopped(long durationMs) {
+    LOG.info("RPC server is stopped. Spend {} ms.", durationMs);
+  }
+
+  @Override
+  public void logMetadataManagerStopped(long durationMs) {
+    LOG.info("metadataManager is stopped. Spend {} ms.", durationMs);
+  }
+
+  @Override
+  public void logRpcServerRestarted(long durationMs) {
+    LOG.info("RPC server is re-started. Spend {} ms.", durationMs);
+  }
+
+  @Override
   public void stopTrashEmptier() {
     if (this.emptier != null) {
       emptier.interrupt();
