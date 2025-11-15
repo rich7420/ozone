@@ -19,7 +19,6 @@ package org.apache.hadoop.ozone.om.checkpoint;
 
 import java.io.File;
 import java.nio.file.Path;
-
 import org.apache.hadoop.hdds.utils.TransactionInfo;
 import org.apache.hadoop.ozone.om.ratis.utils.OzoneManagerRatisUtils;
 import org.apache.hadoop.util.Time;
@@ -80,14 +79,16 @@ public class OMCheckpointInstaller {
     boolean canProceed = OzoneManagerRatisUtils.verifyTransactionInfo(
         checkpointTrxnInfo, lastAppliedIndex, leaderId, checkpointLocation);
 
-    CheckpointInstallResult result = installCheckpointIfPossible(
+    CheckpointInstallParams params = new CheckpointInstallParams(
         canProceed, leaderId, oldDBLocation, checkpointLocation,
         checkpointTrxnInfo, termIndex, term, lastAppliedIndex);
-    File dbBackup = result.dbBackup;
-    term = result.term;
-    lastAppliedIndex = result.lastAppliedIndex;
-    boolean oldOmMetadataManagerStopped = result.oldOmMetadataManagerStopped;
-    boolean omRpcServerStopped = result.omRpcServerStopped;
+    CheckpointInstallResult result = installCheckpointIfPossible(params);
+    File dbBackup = result.getDbBackup();
+    term = result.getTerm();
+    lastAppliedIndex = result.getLastAppliedIndex();
+    boolean oldOmMetadataManagerStopped =
+        result.isOldOmMetadataManagerStopped();
+    boolean omRpcServerStopped = result.isOmRpcServerStopped();
 
     if (oldOmMetadataManagerStopped) {
       // Close snapDiff's rocksDB instance only if metadataManager gets closed.
@@ -164,14 +165,74 @@ public class OMCheckpointInstaller {
   }
 
   /**
+   * Parameters for checkpoint installation operation.
+   */
+  private static class CheckpointInstallParams {
+    private final boolean canProceed;
+    private final String leaderId;
+    private final File oldDBLocation;
+    private final Path checkpointLocation;
+    private final TransactionInfo checkpointTrxnInfo;
+    private final TermIndex termIndex;
+    private final long term;
+    private final long lastAppliedIndex;
+
+    CheckpointInstallParams(boolean canProceed, String leaderId,
+        File oldDBLocation, Path checkpointLocation,
+        TransactionInfo checkpointTrxnInfo, TermIndex termIndex,
+        long term, long lastAppliedIndex) {
+      this.canProceed = canProceed;
+      this.leaderId = leaderId;
+      this.oldDBLocation = oldDBLocation;
+      this.checkpointLocation = checkpointLocation;
+      this.checkpointTrxnInfo = checkpointTrxnInfo;
+      this.termIndex = termIndex;
+      this.term = term;
+      this.lastAppliedIndex = lastAppliedIndex;
+    }
+
+    boolean canProceed() {
+      return canProceed;
+    }
+
+    String getLeaderId() {
+      return leaderId;
+    }
+
+    File getOldDBLocation() {
+      return oldDBLocation;
+    }
+
+    Path getCheckpointLocation() {
+      return checkpointLocation;
+    }
+
+    TransactionInfo getCheckpointTrxnInfo() {
+      return checkpointTrxnInfo;
+    }
+
+    TermIndex getTermIndex() {
+      return termIndex;
+    }
+
+    long getTerm() {
+      return term;
+    }
+
+    long getLastAppliedIndex() {
+      return lastAppliedIndex;
+    }
+  }
+
+  /**
    * Result class for checkpoint installation operation.
    */
   private static class CheckpointInstallResult {
-    File dbBackup;
-    long term;
-    long lastAppliedIndex;
-    boolean oldOmMetadataManagerStopped;
-    boolean omRpcServerStopped;
+    private File dbBackup;
+    private long term;
+    private long lastAppliedIndex;
+    private boolean oldOmMetadataManagerStopped;
+    private boolean omRpcServerStopped;
 
     CheckpointInstallResult(File dbBackup, long term, long lastAppliedIndex,
         boolean oldOmMetadataManagerStopped, boolean omRpcServerStopped) {
@@ -181,30 +242,43 @@ public class OMCheckpointInstaller {
       this.oldOmMetadataManagerStopped = oldOmMetadataManagerStopped;
       this.omRpcServerStopped = omRpcServerStopped;
     }
+
+    File getDbBackup() {
+      return dbBackup;
+    }
+
+    long getTerm() {
+      return term;
+    }
+
+    long getLastAppliedIndex() {
+      return lastAppliedIndex;
+    }
+
+    boolean isOldOmMetadataManagerStopped() {
+      return oldOmMetadataManagerStopped;
+    }
+
+    boolean isOmRpcServerStopped() {
+      return omRpcServerStopped;
+    }
   }
 
   /**
    * Install checkpoint if possible.
-   * @param canProceed whether we can proceed with installation
-   * @param leaderId leader OM node ID
-   * @param oldDBLocation old DB location
-   * @param checkpointLocation checkpoint location
-   * @param checkpointTrxnInfo checkpoint transaction info
-   * @param termIndex current term index
-   * @param term current term
-   * @param lastAppliedIndex current last applied index
+   * @param params installation parameters
    * @return installation result
    */
   private CheckpointInstallResult installCheckpointIfPossible(
-      boolean canProceed, String leaderId, File oldDBLocation,
-      Path checkpointLocation, TransactionInfo checkpointTrxnInfo,
-      TermIndex termIndex, long term, long lastAppliedIndex) {
+      CheckpointInstallParams params) {
     File dbBackup = null;
     boolean oldOmMetadataManagerStopped = false;
     boolean omRpcServerStopped = false;
+    long term = params.getTerm();
+    long lastAppliedIndex = params.getLastAppliedIndex();
     long time = Time.monotonicNow();
 
-    if (canProceed) {
+    if (params.canProceed()) {
       // Stop RPC server before stop metadataManager
       serviceManager.stopRpcServer();
       omRpcServerStopped = true;
@@ -225,22 +299,25 @@ public class OMCheckpointInstaller {
       }
       try {
         time = Time.monotonicNow();
-        dbBackup = serviceManager.replaceOMDBWithCheckpoint(lastAppliedIndex,
-            oldDBLocation, checkpointLocation);
-        term = checkpointTrxnInfo.getTerm();
-        lastAppliedIndex = checkpointTrxnInfo.getTransactionIndex();
+        dbBackup = serviceManager.replaceOMDBWithCheckpoint(
+            lastAppliedIndex, params.getOldDBLocation(),
+            params.getCheckpointLocation());
+        term = params.getCheckpointTrxnInfo().getTerm();
+        lastAppliedIndex =
+            params.getCheckpointTrxnInfo().getTransactionIndex();
         LOG.info("Replaced DB with checkpoint from OM: {}, term: {}, " +
-            "index: {}, time: {} ms", leaderId, term, lastAppliedIndex,
-            Time.monotonicNow() - time);
+            "index: {}, time: {} ms", params.getLeaderId(), term,
+            lastAppliedIndex, Time.monotonicNow() - time);
       } catch (Exception e) {
         LOG.error("Failed to install Snapshot from {} as OM failed to " +
             "replace DB with downloaded checkpoint. Reloading old OM state.",
-            leaderId, e);
+            params.getLeaderId(), e);
       }
     } else {
       LOG.warn("Cannot proceed with InstallSnapshot as OM is at TermIndex {} " +
           "and checkpoint has lower TermIndex {}. Reloading old state of OM.",
-          termIndex, checkpointTrxnInfo.getTermIndex());
+          params.getTermIndex(),
+          params.getCheckpointTrxnInfo().getTermIndex());
     }
 
     return new CheckpointInstallResult(dbBackup, term, lastAppliedIndex,
