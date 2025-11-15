@@ -86,9 +86,10 @@ public class ECPipelineProvider extends PipelineProvider<ECReplicationConfig> {
   protected Pipeline create(ECReplicationConfig replicationConfig,
       List<DatanodeDetails> excludedNodes, List<DatanodeDetails> favoredNodes)
       throws IOException {
+    long requiredContainerSize = this.containerSizeBytes * 2;
     List<DatanodeDetails> dns = placementPolicy
         .chooseDatanodes(excludedNodes, favoredNodes,
-            replicationConfig.getRequiredNodes(), 0, this.containerSizeBytes);
+            replicationConfig.getRequiredNodes(), 0, requiredContainerSize);
     return create(replicationConfig, dns);
   }
 

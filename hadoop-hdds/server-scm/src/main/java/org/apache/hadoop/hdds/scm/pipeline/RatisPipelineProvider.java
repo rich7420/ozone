@@ -162,10 +162,11 @@ public class RatisPipelineProvider
 
     final ReplicationFactor factor =
         replicationConfig.getReplicationFactor();
+    long requiredContainerSize = containerSizeBytes * 2;
     switch (factor) {
     case ONE:
       dns = pickNodesNotUsed(replicationConfig, minRatisVolumeSizeBytes,
-          containerSizeBytes, conf);
+          requiredContainerSize, conf);
       break;
     case THREE:
       List<DatanodeDetails> excludeDueToEngagement = filterPipelineEngagement();
@@ -178,7 +179,7 @@ public class RatisPipelineProvider
       }
       dns = placementPolicy.chooseDatanodes(excludedNodes,
           favoredNodes, factor.getNumber(), minRatisVolumeSizeBytes,
-          containerSizeBytes);
+          requiredContainerSize);
       break;
     default:
       throw new IllegalStateException("Unknown factor: " + factor.name());

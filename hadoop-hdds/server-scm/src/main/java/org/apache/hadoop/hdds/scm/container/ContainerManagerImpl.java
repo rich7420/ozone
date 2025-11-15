@@ -352,23 +352,25 @@ public class ContainerManagerImpl implements ContainerManager {
       synchronized (pipeline.getId()) {
         containerIDs = getContainersForOwner(pipeline, owner);
         if (containerIDs.size() < getOpenContainerCountPerPipeline(pipeline)) {
-          if (pipelineManager.hasEnoughSpace(pipeline, maxContainerSize)) {
+          long requiredSpace = maxContainerSize * 2;
+          if (pipelineManager.hasEnoughSpace(pipeline, requiredSpace)) {
             allocateContainer(pipeline, owner);
             containerIDs = getContainersForOwner(pipeline, owner);
           } else {
             LOG.debug("Cannot allocate a new container because pipeline {} does not have the required space {}.",
-                pipeline, maxContainerSize);
+                pipeline, requiredSpace);
           }
         }
         containerIDs.removeAll(excludedContainerIDs);
         containerInfo = containerStateManager.getMatchingContainer(
             size, owner, pipeline.getId(), containerIDs);
         if (containerInfo == null) {
-          if (pipelineManager.hasEnoughSpace(pipeline, maxContainerSize)) {
+          long requiredSpace = maxContainerSize * 2;
+          if (pipelineManager.hasEnoughSpace(pipeline, requiredSpace)) {
             containerInfo = allocateContainer(pipeline, owner);
           } else {
             LOG.debug("Cannot allocate a new container because pipeline {} does not have the required space {}.",
-                pipeline, maxContainerSize);
+                pipeline, requiredSpace);
           }
         }
         return containerInfo;
