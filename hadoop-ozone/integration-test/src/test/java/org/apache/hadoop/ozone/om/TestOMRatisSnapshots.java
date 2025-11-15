@@ -936,7 +936,11 @@ public class TestOMRatisSnapshots {
     }
     cluster.startInactiveOM(followerNodeId);
     GenericTestUtils.setLogLevel(OzoneManager.class, Level.INFO);
+    GenericTestUtils.setLogLevel(
+        org.apache.hadoop.ozone.om.checkpoint.OMCheckpointInstaller.class, Level.INFO);
     LogCapturer logCapture = LogCapturer.captureLogs(OzoneManager.class);
+    LogCapturer checkpointLogCapture = LogCapturer.captureLogs(
+        org.apache.hadoop.ozone.om.checkpoint.OMCheckpointInstaller.class);
 
     OzoneManager followerOM = cluster.getOzoneManager(followerNodeId);
     OzoneManagerRatisServer followerRatisServer = followerOM.getOmRatisServer();
@@ -965,7 +969,10 @@ public class TestOMRatisSnapshots {
     String errorMsg = "Cannot proceed with InstallSnapshot as OM is at " +
         "TermIndex " + followerTermIndex + " and checkpoint has lower " +
         "TermIndex";
-    assertLogCapture(logCapture, errorMsg);
+    // Note: The actual log message includes ". Reloading old state of OM." 
+    // but contains() will match the partial string
+    // Check both OzoneManager and OMCheckpointInstaller logs for compatibility
+    assertLogCapture(logCapture, checkpointLogCapture, errorMsg);
     assertNull(newTermIndex,
         "OM installed checkpoint even though checkpoint " +
             "logIndex is less than it's lastAppliedIndex");
@@ -1099,6 +1106,33 @@ public class TestOMRatisSnapshots {
       throws InterruptedException, TimeoutException {
     GenericTestUtils.waitFor(() -> {
       return logCapture.getOutput().contains(msg);
+    }, 100, 30_000);
+  }
+
+  private void assertLogCapture(LogCapturer logCapture1,
+                              LogCapturer logCapture2,
+                              String msg)
+      throws InterruptedException, TimeoutException {
+    GenericTestUtils.waitFor(() -> {
+      String output1 = logCapture1.getOutput();
+      String output2 = logCapture2 != null ? logCapture2.getOutput() : "";
+      boolean found1 = output1.contains(msg);
+      boolean found2 = logCapture2 != null && output2.contains(msg);
+      if (!found1 && !found2) {
+        // Debug: print what we're looking for and what we found
+        System.out.println("Looking for: " + msg);
+        System.out.println("LogCapture1 output length: " + output1.length());
+        System.out.println("LogCapture2 output length: " + output2.length());
+        if (output1.length() > 0) {
+          System.out.println("LogCapture1 last 500 chars: " + 
+              output1.substring(Math.max(0, output1.length() - 500)));
+        }
+        if (output2.length() > 0) {
+          System.out.println("LogCapture2 last 500 chars: " + 
+              output2.substring(Math.max(0, output2.length() - 500)));
+        }
+      }
+      return found1 || found2;
     }, 100, 30_000);
   }
 

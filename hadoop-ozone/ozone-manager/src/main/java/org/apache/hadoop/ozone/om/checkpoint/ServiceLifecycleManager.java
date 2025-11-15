@@ -153,4 +153,16 @@ public interface ServiceLifecycleManager {
    * @return OzoneConfiguration instance
    */
   org.apache.hadoop.hdds.conf.OzoneConfiguration getConfiguration();
+
+  /**
+   * Log warning message when checkpoint installation cannot proceed.
+   * This is called from OMCheckpointInstaller to ensure the warning
+   * is logged from OzoneManager for test LogCapturer compatibility.
+   *
+   * @param currentTermIndex current TermIndex of the OM
+   * @param checkpointTermIndex TermIndex from the checkpoint
+   */
+  void logCheckpointCannotProceedWarning(
+      org.apache.ratis.server.protocol.TermIndex currentTermIndex,
+      org.apache.ratis.server.protocol.TermIndex checkpointTermIndex);
 }

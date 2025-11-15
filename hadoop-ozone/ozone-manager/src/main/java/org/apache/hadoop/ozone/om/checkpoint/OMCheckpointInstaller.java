@@ -35,7 +35,6 @@ import org.slf4j.LoggerFactory;
 public class OMCheckpointInstaller {
 
   private static final Logger LOG = LoggerFactory.getLogger(OMCheckpointInstaller.class);
-
   private final ServiceLifecycleManager serviceManager;
 
   /**
@@ -76,8 +75,16 @@ public class OMCheckpointInstaller {
     // checkpoint transaction index. If yes, proceed by stopping the ratis
     // server so that the OM state can be re-initialized. If no then do not
     // proceed with installSnapshot.
+    // This check is done after stopServicesAndPause() to match original code flow.
     boolean canProceed = OzoneManagerRatisUtils.verifyTransactionInfo(
         checkpointTrxnInfo, lastAppliedIndex, leaderId, checkpointLocation);
+
+    // Log warning if checkpoint cannot proceed (matching original code)
+    // This must be logged from OzoneManager via callback for test LogCapturer compatibility
+    if (!canProceed) {
+      serviceManager.logCheckpointCannotProceedWarning(termIndex,
+          checkpointTrxnInfo.getTermIndex());
+    }
 
     CheckpointInstallParams params = new CheckpointInstallParams(
         canProceed, leaderId, oldDBLocation, checkpointLocation,
@@ -98,9 +105,12 @@ public class OMCheckpointInstaller {
     // Reload the OM DB store with the new checkpoint.
     // Restart (unpause) the state machine and update its last applied index
     // to the installed checkpoint's snapshot index.
+    // Use updated term and lastAppliedIndex (which may be from checkpoint or original)
+    TermIndex updatedTermIndex = TermIndex.valueOf(term, lastAppliedIndex);
     boolean newMetadataManagerStarted = reloadServices(
-        oldOmMetadataManagerStopped, termIndex, term, lastAppliedIndex);
+        oldOmMetadataManagerStopped, updatedTermIndex, term, lastAppliedIndex);
 
+    // Start RPC server if it was stopped and new metadata manager was started
     if (omRpcServerStopped && newMetadataManagerStarted) {
       startRpcServerIfNeeded();
     }
@@ -125,9 +135,7 @@ public class OMCheckpointInstaller {
     // TODO: We should only return the snpashotIndex to the leader.
     //  Should be fixed after RATIS-586
     TermIndex newTermIndex = TermIndex.valueOf(term, lastAppliedIndex);
-    LOG.info("Install Checkpoint is finished with Term: {} and Index: {}. " +
-        "Spend {} ms.", newTermIndex.getTerm(), newTermIndex.getIndex(),
-        (Time.monotonicNow() - startTime));
+    // Note: Completion logging is done in OzoneManager.installCheckpoint for test compatibility
     return newTermIndex;
   }
 
@@ -276,6 +284,7 @@ public class OMCheckpointInstaller {
     if (params.canProceed()) {
       // Stop RPC server before stop metadataManager
       serviceManager.stopRpcServer();
+      serviceManager.setOmRpcServerRunning(false);
       omRpcServerStopped = true;
       LOG.info("RPC server is stopped. Spend " +
           (Time.monotonicNow() - time) + " ms.");
@@ -308,12 +317,10 @@ public class OMCheckpointInstaller {
             "replace DB with downloaded checkpoint. Reloading old OM state.",
             params.getLeaderId(), e);
       }
-    } else {
-      LOG.warn("Cannot proceed with InstallSnapshot as OM is at TermIndex {} " +
-          "and checkpoint has lower TermIndex {}. Reloading old state of OM.",
-          params.getTermIndex(),
-          params.getCheckpointTrxnInfo().getTermIndex());
     }
+    // Note: Warning log for cannot proceed case is handled in install() method
+    // via serviceManager.logCheckpointCannotProceedWarning() callback
+    // to ensure it's logged from OzoneManager for test LogCapturer compatibility.
 
     return new CheckpointInstallResult(dbBackup, term, lastAppliedIndex,
         oldOmMetadataManagerStopped, omRpcServerStopped);
@@ -365,6 +372,7 @@ public class OMCheckpointInstaller {
     try {
       long time = Time.monotonicNow();
       serviceManager.startRpcServer();
+      serviceManager.setOmRpcServerRunning(true);
       LOG.info("RPC server is re-started. Spend " +
           (Time.monotonicNow() - time) + " ms.");
     } catch (Exception e) {
