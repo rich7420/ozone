@@ -81,7 +81,7 @@ public class OMCheckpointInstaller {
 
     CheckpointInstallParams params = new CheckpointInstallParams(
         canProceed, leaderId, oldDBLocation, checkpointLocation,
-        checkpointTrxnInfo, termIndex, term, lastAppliedIndex);
+        checkpointTrxnInfo, termIndex);
     CheckpointInstallResult result = installCheckpointIfPossible(params);
     File dbBackup = result.getDbBackup();
     term = result.getTerm();
@@ -174,21 +174,16 @@ public class OMCheckpointInstaller {
     private final Path checkpointLocation;
     private final TransactionInfo checkpointTrxnInfo;
     private final TermIndex termIndex;
-    private final long term;
-    private final long lastAppliedIndex;
 
     CheckpointInstallParams(boolean canProceed, String leaderId,
         File oldDBLocation, Path checkpointLocation,
-        TransactionInfo checkpointTrxnInfo, TermIndex termIndex,
-        long term, long lastAppliedIndex) {
+        TransactionInfo checkpointTrxnInfo, TermIndex termIndex) {
       this.canProceed = canProceed;
       this.leaderId = leaderId;
       this.oldDBLocation = oldDBLocation;
       this.checkpointLocation = checkpointLocation;
       this.checkpointTrxnInfo = checkpointTrxnInfo;
       this.termIndex = termIndex;
-      this.term = term;
-      this.lastAppliedIndex = lastAppliedIndex;
     }
 
     boolean canProceed() {
@@ -216,11 +211,11 @@ public class OMCheckpointInstaller {
     }
 
     long getTerm() {
-      return term;
+      return termIndex.getTerm();
     }
 
     long getLastAppliedIndex() {
-      return lastAppliedIndex;
+      return termIndex.getIndex();
     }
   }
 
