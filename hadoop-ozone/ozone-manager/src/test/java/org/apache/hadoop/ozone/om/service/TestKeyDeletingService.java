@@ -1165,6 +1165,10 @@ class TestKeyDeletingService extends OzoneTestBase {
             .stream()
             .mapToInt(OzoneManagerProtocolProtos.DeletedKeys::getKeysCount)
             .sum();
+        
+        // Also count keys in KeysToUpdate, as some keys may be moved to KeysToUpdate
+        // instead of DeletedKeys when they have versions that need to be retained
+        totalPurgedKeysAcrossBatches += purgeRequest.getKeysToUpdateList().size();
       }
 
       // Assert that the sum of keys across all batches equals the total number of keys initially deleted.
