@@ -131,13 +131,13 @@ public abstract class OMFailoverProxyProviderBase<T> implements
     Configuration hadoopConf =
         LegacyHadoopConfigurationSource.asHadoopConfiguration(getConf());
 
-    RPC.setProtocolEngine(hadoopConf, getInterface(), ProtobufRpcEngine2.class);
+    RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine2.class);
 
     // Ensure we do not attempt retry on the same OM in case of exceptions
     RetryPolicy connectionRetryPolicy = RetryPolicies.failoverOnNetworkException(0);
 
     return (T) RPC.getProtocolProxy(
-        getInterface(),
+        protocolClass,
         RPC.getProtocolVersion(protocolClass),
         omAddress,
         ugi,
