@@ -47,6 +47,7 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationFactor;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.TransferLeadershipRequestProto;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.UpgradeFinalizationStatus;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.StorageContainerLocationProtocolService;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.ActivatePipelineRequestProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.ClosePipelineRequestProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerLocationProtocolProtos.ContainerBalancerStatusInfoRequestProto;
@@ -156,6 +157,7 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
   private static final RpcController NULL_RPC_CONTROLLER = null;
 
   private final StorageContainerLocationProtocolPB rpcProxy;
+  private final StorageContainerLocationProtocolService.BlockingInterface stub;
   private final SCMContainerLocationFailoverProxyProvider fpp;
 
   /**
@@ -171,6 +173,10 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
         StorageContainerLocationProtocolPB.class,
         fpp,
         fpp.getRetryPolicy());
+    // rpcProxy is already a ProtobufRpcEngine2 BlockingInterface
+    // because StorageContainerLocationProtocolPB extends BlockingInterface.
+    // We assign it to stub to make the ProtobufRpcEngine2 usage explicit.
+    this.stub = rpcProxy;
   }
 
   /**
@@ -198,12 +204,17 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
   private ScmContainerLocationResponse submitRpcRequest(
       ScmContainerLocationRequest wrapper) throws ServiceException {
     if (!ADMIN_COMMAND_TYPE.contains(wrapper.getCmdType())) {
-      return rpcProxy.submitRequest(NULL_RPC_CONTROLLER, wrapper);
+      // Use stub for ProtobufRpcEngine2 compatibility
+      // StorageContainerLocationProtocolPB extends BlockingInterface,
+      // so stub.submitRequest is the correct way to call
+      return stub.submitRequest(NULL_RPC_CONTROLLER, wrapper);
     }
 
     // TODO: Modify ScmContainerLocationResponse to hold results from multi SCM
+    // For admin commands, iterate through all proxies
     ScmContainerLocationResponse response = null;
     for (StorageContainerLocationProtocolPB proxy : fpp.getProxies()) {
+      // proxy itself is BlockingInterface, use it directly
       response = proxy.submitRequest(NULL_RPC_CONTROLLER, wrapper);
     }
     return response;

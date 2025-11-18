@@ -40,6 +40,7 @@ import org.apache.hadoop.io.retry.FailoverProxyProvider;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.ipc.ProtobufRpcEngine;
+import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -293,7 +294,13 @@ public abstract class SCMFailoverProxyProviderBase<T> implements FailoverProxyPr
   private T createSCMProxy(InetSocketAddress scmAddress) throws IOException {
     Configuration hadoopConf =
         LegacyHadoopConfigurationSource.asHadoopConfiguration(conf);
-    RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine.class);
+    // Only set ProtobufRpcEngine2 for StorageContainerLocationProtocolPB
+    // Other protocols will continue using ProtobufRpcEngine until migrated
+    if (protocolClass == org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB.class) {
+      RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine2.class);
+    } else {
+      RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine.class);
+    }
     // FailoverOnNetworkException ensures that the IPC layer does not attempt
     // retries on the same SCM in case of connection exception. This retry
     // policy essentially results in TRY_ONCE_THEN_FAIL.
