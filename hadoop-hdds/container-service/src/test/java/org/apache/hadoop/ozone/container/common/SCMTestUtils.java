@@ -38,7 +38,7 @@ import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.utils.HddsServerUtil;
 import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.hdds.utils.ProtocolMessageMetrics;
-import org.apache.hadoop.ipc.ProtobufRpcEngine2;
+import org.apache.hadoop.ipc.ProtobufRpcEngine;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ozone.protocol.StorageContainerDatanodeProtocol;
 import org.apache.hadoop.ozone.protocolPB.StorageContainerDatanodeProtocolPB;
@@ -95,7 +95,7 @@ public final class SCMTestUtils {
         LegacyHadoopConfigurationSource.asHadoopConfiguration(configuration);
     RPC.setProtocolEngine(hadoopConfig,
         StorageContainerDatanodeProtocolPB.class,
-        ProtobufRpcEngine2.class);
+        ProtobufRpcEngine.class);
 
     BlockingService scmDatanodeService =
         StorageContainerDatanodeProtocolService.
@@ -109,6 +109,66 @@ public final class SCMTestUtils {
 
     scmServer.start();
     return scmServer;
+  }
+
+  /**
+   * Creates a builder-based RPC server for testing purposes.
+   * This helper method provides a builder-based server that can be used
+   * in future phases for ProtobufRpcEngine2 migration, but currently
+   * uses the default ProtobufRpcEngine.
+   *
+   * @param conf Configuration
+   * @param addr InetSocketAddress for the server
+   * @param protocol Protocol class
+   * @param impl Protocol implementation instance
+   * @param handlerCount Number of handler threads
+   * @return RPC.Server instance
+   * @throws IOException if there is an I/O error while creating RPC server
+   */
+  public static RPC.Server createTestRpcServer(
+      Configuration conf,
+      InetSocketAddress addr,
+      Class<?> protocol,
+      Object impl,
+      int handlerCount) throws IOException {
+    return new RPC.Builder(conf)
+        .setProtocol(protocol)
+        .setInstance(impl)
+        .setBindAddress(addr.getHostString())
+        .setPort(addr.getPort())
+        .setNumHandlers(handlerCount)
+        .setVerbose(false)
+        .build();
+  }
+
+  /**
+   * Creates a test RPC client proxy for testing purposes.
+   * This helper method uses the default ProtobufRpcEngine and can be
+   * used in future phases for ProtobufRpcEngine2 migration.
+   *
+   * @param <T> Protocol interface type
+   * @param conf Configuration
+   * @param protocol Protocol class
+   * @param address Server address
+   * @param rpcTimeout RPC timeout in milliseconds
+   * @return Protocol proxy instance
+   * @throws IOException if there is an I/O error while creating RPC client
+   */
+  public static <T> T getTestRpcClient(
+      Configuration conf,
+      Class<T> protocol,
+      InetSocketAddress address,
+      int rpcTimeout) throws IOException {
+    long version = RPC.getProtocolVersion(protocol);
+    return RPC.getProtocolProxy(
+        protocol,
+        version,
+        address,
+        org.apache.hadoop.security.UserGroupInformation.getCurrentUser(),
+        conf,
+        org.apache.hadoop.net.NetUtils.getDefaultSocketFactory(conf),
+        rpcTimeout,
+        org.apache.hadoop.io.retry.RetryPolicies.TRY_ONCE_THEN_FAIL).getProxy();
   }
 
   public static InetSocketAddress getReuseableAddress() throws IOException {
