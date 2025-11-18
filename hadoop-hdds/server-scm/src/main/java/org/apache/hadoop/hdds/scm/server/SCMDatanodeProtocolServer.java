@@ -79,7 +79,7 @@ import org.apache.hadoop.hdds.server.events.EventPublisher;
 import org.apache.hadoop.hdds.utils.HddsServerUtil;
 import org.apache.hadoop.hdds.utils.ProtocolMessageMetrics;
 import org.apache.hadoop.io.IOUtils;
-import org.apache.hadoop.ipc.ProtobufRpcEngine;
+import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.ozone.audit.AuditAction;
@@ -162,7 +162,7 @@ public class SCMDatanodeProtocolServer implements
     final int readThreads = conf.getInt(OZONE_SCM_DATANODE_READ_THREADPOOL_KEY,
         OZONE_SCM_DATANODE_READ_THREADPOOL_DEFAULT);
 
-    RPC.setProtocolEngine(conf, getProtocolClass(), ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(conf, getProtocolClass(), ProtobufRpcEngine2.class);
 
     BlockingService dnProtoPbService =
         StorageContainerDatanodeProtocolProtos

@@ -43,7 +43,7 @@ import org.apache.hadoop.hdds.protocol.proto.ReconfigureProtocolProtos.ListRecon
 import org.apache.hadoop.hdds.protocol.proto.ReconfigureProtocolProtos.StartReconfigureRequestProto;
 import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.ipc.ProtobufHelper;
-import org.apache.hadoop.ipc.ProtobufRpcEngine;
+import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.ProtocolMetaInterface;
 import org.apache.hadoop.ipc.ProtocolTranslator;
 import org.apache.hadoop.ipc.RPC;
@@ -96,7 +96,7 @@ public class ReconfigureProtocolClientSideTranslatorPB implements
         .asHadoopConfiguration(conf);
     if (nodeType == HddsProtos.NodeType.OM) {
       RPC.setProtocolEngine(OzoneConfiguration.of(conf),
-          ReconfigureProtocolOmPB.class, ProtobufRpcEngine.class);
+          ReconfigureProtocolOmPB.class, ProtobufRpcEngine2.class);
       return RPC.getProtocolProxy(
               ReconfigureProtocolOmPB.class,
               RPC.getProtocolVersion(ReconfigureProtocolOmPB.class),
@@ -105,7 +105,7 @@ public class ReconfigureProtocolClientSideTranslatorPB implements
           .getProxy();
     } else if (nodeType == HddsProtos.NodeType.DATANODE) {
       RPC.setProtocolEngine(OzoneConfiguration.of(conf),
-          ReconfigureProtocolDatanodePB.class, ProtobufRpcEngine.class);
+          ReconfigureProtocolDatanodePB.class, ProtobufRpcEngine2.class);
       return RPC.getProtocolProxy(
               ReconfigureProtocolDatanodePB.class,
               RPC.getProtocolVersion(ReconfigureProtocolDatanodePB.class),
@@ -114,7 +114,7 @@ public class ReconfigureProtocolClientSideTranslatorPB implements
           .getProxy();
     } else {
       RPC.setProtocolEngine(OzoneConfiguration.of(conf),
-          ReconfigureProtocolPB.class, ProtobufRpcEngine.class);
+          ReconfigureProtocolPB.class, ProtobufRpcEngine2.class);
       return RPC.getProtocolProxy(
               ReconfigureProtocolPB.class,
               RPC.getProtocolVersion(ReconfigureProtocolPB.class),

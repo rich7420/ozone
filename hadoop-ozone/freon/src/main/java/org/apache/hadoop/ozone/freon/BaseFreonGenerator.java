@@ -47,7 +47,7 @@ import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol;
 import org.apache.hadoop.hdds.tracing.TracingUtil;
 import org.apache.hadoop.hdds.utils.HAUtils;
-import org.apache.hadoop.ipc.ProtobufRpcEngine;
+import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ozone.client.OzoneClient;
 import org.apache.hadoop.ozone.client.OzoneClientFactory;
@@ -415,7 +415,7 @@ public class BaseFreonGenerator implements FreonSubcommand {
       OzoneConfiguration conf, String omServiceID) throws IOException {
     UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
     RPC.setProtocolEngine(conf, OzoneManagerProtocolPB.class,
-        ProtobufRpcEngine.class);
+        ProtobufRpcEngine2.class);
     String clientId = ClientId.randomId().toString();
 
     if (omServiceID == null) {
