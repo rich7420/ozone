@@ -169,14 +169,14 @@ public class SCMSecurityProtocolServer implements SCMSecurityProtocol,
     // because startRpcServer + addPBProtocol resets engine incorrectly
     // This ensures Security protocols always use Engine1 (reflective PB)
     // and prevents cross-contamination with Engine2 protocols
-    RPC.setProtocolEngine(conf, SCMSecurityProtocolPB.class,
-        ProtobufRpcEngine.class);
-    RPC.setProtocolEngine(conf, SecretKeyProtocolDatanodePB.class,
-        ProtobufRpcEngine.class);
-    RPC.setProtocolEngine(conf, SecretKeyProtocolOmPB.class,
-        ProtobufRpcEngine.class);
-    RPC.setProtocolEngine(conf, SecretKeyProtocolScmPB.class,
-        ProtobufRpcEngine.class);
+    // Note: RPC.setProtocolEngine(conf, ...) sets engine in configuration,
+    // and the server reads from configuration when handling requests.
+    // This must be done AFTER all addPBProtocol() calls to ensure the override
+    // is not reset by subsequent addPBProtocol() invocations.
+    RPC.setProtocolEngine(conf, SCMSecurityProtocolPB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(conf, SecretKeyProtocolDatanodePB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(conf, SecretKeyProtocolOmPB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(conf, SecretKeyProtocolScmPB.class, ProtobufRpcEngine.class);
     if (conf.getBoolean(
         CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHORIZATION, false)) {
       rpcServer.refreshServiceAcl(conf, SCMPolicyProvider.getInstance());
