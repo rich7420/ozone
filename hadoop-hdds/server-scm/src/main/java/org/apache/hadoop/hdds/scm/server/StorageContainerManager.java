@@ -138,7 +138,6 @@ import org.apache.hadoop.hdds.scm.pipeline.PipelineManagerImpl;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineReportHandler;
 import org.apache.hadoop.hdds.scm.pipeline.WritableContainerFactory;
 import org.apache.hadoop.hdds.scm.pipeline.choose.algorithms.PipelineChoosePolicyFactory;
-import org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB;
 import org.apache.hadoop.hdds.scm.safemode.SCMSafeModeManager;
 import org.apache.hadoop.hdds.scm.security.RootCARotationManager;
 import org.apache.hadoop.hdds.scm.security.SecretKeyManagerService;
@@ -1120,13 +1119,12 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
 
     HddsServerUtil.addPBProtocol(conf, protocol, instance, rpcServer);
 
-    // Override Engine1 registration for SCM Location Protocol only.
-    // addPBProtocol() always forces ProtobufRpcEngine, so we must override it here.
-    String p = protocol.getName();
-    if (p.equals("org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB")) {
-        RPC.setProtocolEngine(conf,
-            protocol,
-            ProtobufRpcEngine2.class);
+    // Override only for StorageContainerLocationProtocolPB.
+    // addPBProtocol() resets RPC engine to ProtobufRpcEngine (v1) for all protocols.
+    // We need to re‑set Engine2 ONLY for SCLocation protocol.
+    if ("org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB"
+        .equals(protocol.getName())) {
+      RPC.setProtocolEngine(conf, protocol, ProtobufRpcEngine2.class);
     }
     return rpcServer;
   }
