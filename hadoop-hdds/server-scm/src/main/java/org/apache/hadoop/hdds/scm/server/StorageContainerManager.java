@@ -1122,10 +1122,11 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
 
     // Override Engine1 registration for SCM Location Protocol only.
     // addPBProtocol() always forces ProtobufRpcEngine, so we must override it here.
-    if (protocol == StorageContainerLocationProtocolPB.class) {
-      RPC.setProtocolEngine(conf,
-          StorageContainerLocationProtocolPB.class,
-          ProtobufRpcEngine2.class);
+    String p = protocol.getName();
+    if (p.equals("org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB")) {
+        RPC.setProtocolEngine(conf,
+            protocol,
+            ProtobufRpcEngine2.class);
     }
     return rpcServer;
   }
