@@ -66,6 +66,7 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeState;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMCommandProto;
 import org.apache.hadoop.hdds.protocolPB.SCMSecurityProtocolClientSideTranslatorPB;
+import org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB;
 import org.apache.hadoop.hdds.scm.PipelineChoosePolicy;
 import org.apache.hadoop.hdds.scm.PlacementPolicy;
 import org.apache.hadoop.hdds.scm.PlacementPolicyValidateProxy;
@@ -174,6 +175,7 @@ import org.apache.hadoop.hdds.utils.HddsVersionInfo;
 import org.apache.hadoop.hdds.utils.IOUtils;
 import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.hdds.utils.NettyMetrics;
+import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.metrics2.MetricsSystem;
 import org.apache.hadoop.metrics2.util.MBeans;
@@ -1117,6 +1119,14 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
         .build();
 
     HddsServerUtil.addPBProtocol(conf, protocol, instance, rpcServer);
+
+    // Override Engine1 registration for SCM Location Protocol only.
+    // addPBProtocol() always forces ProtobufRpcEngine, so we must override it here.
+    if (protocol == StorageContainerLocationProtocolPB.class) {
+      RPC.setProtocolEngine(conf,
+          StorageContainerLocationProtocolPB.class,
+          ProtobufRpcEngine2.class);
+    }
     return rpcServer;
   }
 
