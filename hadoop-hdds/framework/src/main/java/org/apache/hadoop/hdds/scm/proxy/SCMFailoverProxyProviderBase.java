@@ -296,7 +296,9 @@ public abstract class SCMFailoverProxyProviderBase<T> implements FailoverProxyPr
         LegacyHadoopConfigurationSource.asHadoopConfiguration(conf);
     // Only set ProtobufRpcEngine2 for StorageContainerLocationProtocolPB
     // Other protocols will continue using ProtobufRpcEngine until migrated
-    if (protocolClass == org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB.class) {
+    // Use getName().equals() instead of == to avoid classloader issues in Docker/multi-classloader environments
+    if ("org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB"
+        .equals(protocolClass.getName())) {
       RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine2.class);
     } else {
       RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine.class);
