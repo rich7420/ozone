@@ -102,41 +102,6 @@ public class ReconControllerModule extends AbstractModule {
 
   @Override
   protected void configure() {
-    // ⭐ CRITICAL: Set RPC engines at module initialization time (before any RPC clients are created)
-    // This must be done in configure() to ensure engines are set before:
-    // - SCLocationProtocol FailoverProxyProvider construction
-    // - SCLocationProtocol ClientSideTranslator construction
-    // - RPC.getProxy() proxy creation
-    // Otherwise, the engine will default to Engine1 and cause IllegalStateException
-    // when calling submitRequest() against an Engine2 server.
-    OzoneConfiguration configuration = new OzoneConfiguration();
-
-    // Location Protocol must use Engine2 (same as SCM server)
-    // This is critical for compatibility: SCM server uses Engine2, so Recon client must also use Engine2
-    RPC.setProtocolEngine(
-        configuration,
-        StorageContainerLocationProtocolPB.class,
-        ProtobufRpcEngine2.class);
-
-    // Force Security protocols to stay on Engine1 (reflective PB)
-    // These protocols must use Engine1 to avoid certificate/secret key failures
-    RPC.setProtocolEngine(
-        configuration,
-        SCMSecurityProtocolPB.class,
-        ProtobufRpcEngine.class);
-    RPC.setProtocolEngine(
-        configuration,
-        SecretKeyProtocolScmPB.class,
-        ProtobufRpcEngine.class);
-    RPC.setProtocolEngine(
-        configuration,
-        SecretKeyProtocolOmPB.class,
-        ProtobufRpcEngine.class);
-    RPC.setProtocolEngine(
-        configuration,
-        SecretKeyProtocolDatanodePB.class,
-        ProtobufRpcEngine.class);
-
     bind(OzoneConfiguration.class).toProvider(ConfigurationProvider.class);
     bind(ReconHttpServer.class).in(Singleton.class);
     bind(ReconStorageConfig.class).in(Singleton.class);
@@ -246,9 +211,20 @@ public class ReconControllerModule extends AbstractModule {
   @Provides
   StorageContainerLocationProtocol getSCMProtocol(
       final OzoneConfiguration configuration) {
-    // Note: RPC engine settings are now done in configure() method
-    // to ensure they are set before any RPC clients are created.
-    // This method only creates the client instance.
+    // --- Security RPC -> Engine1 ---
+    RPC.setProtocolEngine(configuration,
+        SCMSecurityProtocolPB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(configuration,
+        SecretKeyProtocolScmPB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(configuration,
+        SecretKeyProtocolOmPB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(configuration,
+        SecretKeyProtocolDatanodePB.class, ProtobufRpcEngine.class);
+
+    // --- Location RPC -> Engine2 ---
+    RPC.setProtocolEngine(configuration,
+        StorageContainerLocationProtocolPB.class,
+        ProtobufRpcEngine2.class);
     return newContainerRpcClient(configuration);
   }
 
