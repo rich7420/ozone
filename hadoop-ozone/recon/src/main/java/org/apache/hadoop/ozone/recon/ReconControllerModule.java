@@ -34,8 +34,16 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
+import org.apache.hadoop.hdds.protocolPB.SCMSecurityProtocolPB;
+import org.apache.hadoop.hdds.protocolPB.SecretKeyProtocolDatanodePB;
+import org.apache.hadoop.hdds.protocolPB.SecretKeyProtocolOmPB;
+import org.apache.hadoop.hdds.protocolPB.SecretKeyProtocolScmPB;
 import org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol;
+import org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB;
 import org.apache.hadoop.hdds.scm.server.OzoneStorageContainerManager;
+import org.apache.hadoop.ipc.ProtobufRpcEngine;
+import org.apache.hadoop.ipc.ProtobufRpcEngine2;
+import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ozone.om.OMMetadataManager;
 import org.apache.hadoop.ozone.om.protocol.OzoneManagerProtocol;
 import org.apache.hadoop.ozone.om.protocolPB.OmTransport;
@@ -203,9 +211,33 @@ public class ReconControllerModule extends AbstractModule {
   @Provides
   StorageContainerLocationProtocol getSCMProtocol(
       final OzoneConfiguration configuration) {
-    StorageContainerLocationProtocol storageContainerLocationProtocol = null;
-    storageContainerLocationProtocol = newContainerRpcClient(configuration);
-    return storageContainerLocationProtocol;
+    // Force Security protocols to stay on Engine1 (reflective PB)
+    // These protocols must use Engine1 to avoid certificate/secret key failures
+    RPC.setProtocolEngine(
+        configuration,
+        SCMSecurityProtocolPB.class,
+        ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(
+        configuration,
+        SecretKeyProtocolScmPB.class,
+        ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(
+        configuration,
+        SecretKeyProtocolOmPB.class,
+        ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(
+        configuration,
+        SecretKeyProtocolDatanodePB.class,
+        ProtobufRpcEngine.class);
+
+    // Only SCLocationProtocolPB uses Engine2 (same as SCM server)
+    // This is critical for compatibility: SCM server uses Engine2, so Recon client must also use Engine2
+    RPC.setProtocolEngine(
+        configuration,
+        StorageContainerLocationProtocolPB.class,
+        ProtobufRpcEngine2.class);
+
+    return newContainerRpcClient(configuration);
   }
 
   @Provides
