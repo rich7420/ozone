@@ -56,6 +56,10 @@ import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.DatanodeID;
 import org.apache.hadoop.hdds.protocol.SecretKeyProtocol;
 import org.apache.hadoop.hdds.protocolPB.SCMSecurityProtocolClientSideTranslatorPB;
+import org.apache.hadoop.hdds.protocolPB.SCMSecurityProtocolPB;
+import org.apache.hadoop.hdds.protocolPB.SecretKeyProtocolDatanodePB;
+import org.apache.hadoop.ipc.ProtobufRpcEngine;
+import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.hdds.security.symmetric.DefaultSecretKeyClient;
 import org.apache.hadoop.hdds.security.symmetric.SecretKeyClient;
@@ -392,6 +396,12 @@ public class HddsDatanodeService extends GenericCli implements Callable<Void>, S
   public CertificateClient initializeCertificateClient(
       CertificateClient certClient) throws IOException {
     LOG.info("Initializing secure Datanode.");
+
+    // Force Security protocols to use Engine1 (reflective PB)
+    // This ensures DN client-side Security RPC matches SCM server-side Engine1
+    // and prevents certificate/secret key failures
+    RPC.setProtocolEngine(conf, SCMSecurityProtocolPB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(conf, SecretKeyProtocolDatanodePB.class, ProtobufRpcEngine.class);
 
     if (certClient == null) {
       dnCertClient = new DNCertificateClient(secConf,

@@ -177,6 +177,8 @@ import org.apache.hadoop.hdds.protocol.SecretKeyProtocol;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.protocol.proto.ReconfigureProtocolProtos.ReconfigureProtocolService;
 import org.apache.hadoop.hdds.protocolPB.ReconfigureProtocolOmPB;
+import org.apache.hadoop.hdds.protocolPB.SCMSecurityProtocolPB;
+import org.apache.hadoop.hdds.protocolPB.SecretKeyProtocolOmPB;
 import org.apache.hadoop.hdds.protocolPB.ReconfigureProtocolServerSideTranslatorPB;
 import org.apache.hadoop.hdds.protocolPB.SCMSecurityProtocolClientSideTranslatorPB;
 import org.apache.hadoop.hdds.ratis.RatisHelper;
@@ -654,6 +656,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
         throw new RuntimeException("OzoneManager started in secure mode but " +
             "doesn't have SCM signed certificate.");
       }
+      // Force Security protocols to use Engine1 (reflective PB)
+      // This ensures OM client-side Security RPC matches SCM server-side Engine1
+      // and prevents certificate/secret key failures
+      RPC.setProtocolEngine(configuration, SCMSecurityProtocolPB.class, ProtobufRpcEngine.class);
+      RPC.setProtocolEngine(configuration, SecretKeyProtocolOmPB.class, ProtobufRpcEngine.class);
       SCMSecurityProtocolClientSideTranslatorPB scmSecurityClient =
           getScmSecurityClientWithMaxRetry(configuration, getCurrentUser());
       certClient = new OMCertificateClient(secConfig, scmSecurityClient,
@@ -1585,6 +1592,12 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
   public static void initializeSecurity(OzoneConfiguration conf,
       OMStorage omStore, String scmId) throws IOException {
     LOG.info("Initializing secure OzoneManager.");
+
+    // Force Security protocols to use Engine1 (reflective PB)
+    // This ensures OM client-side Security RPC matches SCM server-side Engine1
+    // and prevents certificate/secret key failures
+    RPC.setProtocolEngine(conf, SCMSecurityProtocolPB.class, ProtobufRpcEngine.class);
+    RPC.setProtocolEngine(conf, SecretKeyProtocolOmPB.class, ProtobufRpcEngine.class);
 
     HddsProtos.OzoneManagerDetailsProto omInfo =
         getOmDetailsProto(conf, omStore.getOmId());
