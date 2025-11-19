@@ -123,6 +123,36 @@ wait_for_safemode_exit(){
   fi
 
   wait_for_port ${SCM} 9860 120
+
+  # Wait for Engine2 RPC to complete initialization (warm-up)
+  # Engine2 needs to initialize callId, retryCount, protobuf header context,
+  # IPC client, and connection handshake before it can handle RPC requests.
+  # This prevents race condition where safemode wait is called immediately
+  # after port 9860 becomes available but before Engine2 is ready.
+  echo "Waiting for SCM location protocol (Engine2) to warm up..."
+  local warmup_cmd="ozone scm datanode count >/dev/null 2>&1"
+  if [[ "${SECURITY_ENABLED}" == 'true' ]]; then
+    warmup_cmd="kinit -k HTTP/scm@EXAMPLE.COM -t /etc/security/keytabs/HTTP.keytab && $warmup_cmd"
+  fi
+  
+  local ret=1
+  local max_attempts=30
+  local attempt=0
+  while [[ $ret -ne 0 ]] && [[ $attempt -lt $max_attempts ]]; do
+    if execute_commands_in_container ${SCM} "$warmup_cmd" >/dev/null 2>&1; then
+      ret=0
+      echo "SCM location protocol (Engine2) is ready"
+    else
+      echo "Waiting for SCM location protocol to warm up... (attempt $((attempt+1))/$max_attempts)"
+      sleep 2
+      attempt=$((attempt+1))
+    fi
+  done
+
+  if [[ $ret -ne 0 ]]; then
+    echo "WARNING: SCM location protocol warm-up check failed, but continuing with safemode wait"
+  fi
+
   execute_commands_in_container ${SCM} "$cmd"
 }
 
