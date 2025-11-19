@@ -149,11 +149,6 @@ public class SCMClientProtocolServer implements
     final int readThreads = conf.getInt(OZONE_SCM_CLIENT_READ_THREADPOOL_KEY,
         OZONE_SCM_CLIENT_READ_THREADPOOL_DEFAULT);
 
-    // Set ProtobufRpcEngine2 for StorageContainerLocationProtocolPB only
-    // Other protocols will continue using ProtobufRpcEngine until migrated
-    RPC.setProtocolEngine(conf, StorageContainerLocationProtocolPB.class,
-        ProtobufRpcEngine2.class);
-
     protocolMetrics = ProtocolMessageMetrics
         .create("ScmContainerLocationProtocol",
             "SCM ContainerLocation protocol metrics",
@@ -178,6 +173,11 @@ public class SCMClientProtocolServer implements
         .setSecretManager(null)
         .build();
 
+    // addPBProtocol() ALWAYS overwrites the RPC engine to ProtobufRpcEngine (v1)
+    // We need to call it for protocols that require reflective BlockingService
+    // (like ReconfigureProtocolPB), but it will reset Engine2 if called for
+    // StorageContainerLocationProtocolPB. So we must override Engine2 AFTER
+    // all addPBProtocol() calls.
     // Add reconfigureProtocolService.
     ReconfigureProtocolServerSideTranslatorPB reconfigureServerProtocol
         = new ReconfigureProtocolServerSideTranslatorPB(reconfigurationHandler);
@@ -186,6 +186,12 @@ public class SCMClientProtocolServer implements
             reconfigureServerProtocol);
     HddsServerUtil.addPBProtocol(conf, ReconfigureProtocolPB.class,
         reconfigureService, clientRpcServer);
+
+    // NOW override Engine2 for StorageContainerLocationProtocolPB only
+    // This must come AFTER addPBProtocol() to ensure Engine2 is not overwritten
+    // Other protocols (ReconfigureProtocolPB, Security, etc.) will use Engine1
+    RPC.setProtocolEngine(conf, StorageContainerLocationProtocolPB.class,
+        ProtobufRpcEngine2.class);
 
     clientRpcAddress =
         updateRPCListenAddress(conf,

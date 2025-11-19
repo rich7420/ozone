@@ -174,7 +174,6 @@ import org.apache.hadoop.hdds.utils.HddsVersionInfo;
 import org.apache.hadoop.hdds.utils.IOUtils;
 import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.hdds.utils.NettyMetrics;
-import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.metrics2.MetricsSystem;
 import org.apache.hadoop.metrics2.util.MBeans;
@@ -1119,13 +1118,6 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
 
     HddsServerUtil.addPBProtocol(conf, protocol, instance, rpcServer);
 
-    // Override only for StorageContainerLocationProtocolPB.
-    // addPBProtocol() resets RPC engine to ProtobufRpcEngine (v1) for all protocols.
-    // We need to re‑set Engine2 ONLY for SCLocation protocol.
-    if ("org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB"
-        .equals(protocol.getName())) {
-      RPC.setProtocolEngine(conf, protocol, ProtobufRpcEngine2.class);
-    }
     return rpcServer;
   }
 
