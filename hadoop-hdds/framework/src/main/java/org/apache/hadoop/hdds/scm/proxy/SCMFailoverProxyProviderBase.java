@@ -302,26 +302,23 @@ public abstract class SCMFailoverProxyProviderBase<T> implements FailoverProxyPr
     Configuration hadoopConf =
         LegacyHadoopConfigurationSource.asHadoopConfiguration(conf);
     
-    // Important: LegacyHadoopConfigurationSource.asHadoopConfiguration() creates a NEW
-    // Configuration instance, so the Engine2 setting from HAUtils is not preserved.
-    // We must re-apply the Engine2 setting here for StorageContainerLocationProtocolPB.
-    // This ensures that when RPC.getProtocolProxy() is called, it uses Engine2.
-    String engineName = "ProtobufRpcEngine"; // default
+    // ⭐ 關鍵：在這裡強制設定 Engine2
+    // 我們不管傳進來的 conf 有沒有設定，我們就在這裡設，因為這是建立 Proxy 前的最後一哩路。
+    // 這樣可以攔截所有路徑，包括 CLI, Recon, ContainerOperationClient 等等。
     if (StorageContainerLocationProtocolPB.class.isAssignableFrom(protocolClass)) {
       RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine2.class);
-      engineName = "ProtobufRpcEngine2";
     }
     
     // --- DEBUG START ---
     getLogger().info("DEBUG: createSCMProxy called for protocol: {}", protocolClass.getName());
     getLogger().info("DEBUG: hadoopConf instance: {}", System.identityHashCode(hadoopConf));
     getLogger().info("DEBUG: conf instance (source): {}", System.identityHashCode(conf));
-    getLogger().info("DEBUG: Engine set for protocol: {}", engineName);
+    getLogger().info("DEBUG: Engine set for StorageContainerLocationProtocolPB: ProtobufRpcEngine2");
     // --- DEBUG END ---
-    // For ProtobufRpcEngine2, we cannot use RetryPolicies.failoverOnNetworkException(0)
-    // as it is not supported. Pass null to use the default retry policy.
-    // The failover behavior is already handled by the FailoverProxyProvider itself.
+    
+    // 對於 Engine2，RetryPolicy 必須是 null (因為 failoverOnNetworkException 不被支援)
     RetryPolicy connectionRetryPolicy = null;
+    
     return RPC.getProtocolProxy(
         protocolClass,
         scmVersion, scmAddress, ugi,
