@@ -129,21 +129,24 @@ wait_for_safemode_exit(){
   # IPC client, and connection handshake before it can handle RPC requests.
   # This prevents race condition where safemode wait is called immediately
   # after port 9860 becomes available but before Engine2 is ready.
-  echo "Waiting for SCM location protocol (Engine2) to warm up..."
-  local warmup_cmd="ozone scm datanode count >/dev/null 2>&1"
+  # NOTE: Must use a command that actually uses Engine2 (StorageContainerLocationProtocol),
+  # not Engine1. "ozone admin container list" uses StorageContainerLocationProtocolPB.submitRequest()
+  # (Engine2), while "ozone admin safemode status" uses SCMBlockLocationProtocol (Engine1).
+  echo "Waiting for Engine2 Location RPC to warm up..."
+  local warmup_cmd="ozone admin container list >/dev/null 2>&1"
   if [[ "${SECURITY_ENABLED}" == 'true' ]]; then
-    warmup_cmd="kinit -k HTTP/scm@EXAMPLE.COM -t /etc/security/keytabs/HTTP.keytab && $warmup_cmd"
+    warmup_cmd="kinit -k HTTP/scm@EXAMPLE.COM -t /etc/security/keytabs/HTTP.keytab && ozone admin container list >/dev/null 2>&1"
   fi
   
   local ret=1
-  local max_attempts=30
   local attempt=0
+  local max_attempts=30
   while [[ $ret -ne 0 ]] && [[ $attempt -lt $max_attempts ]]; do
     if execute_commands_in_container ${SCM} "$warmup_cmd" >/dev/null 2>&1; then
+      echo "Engine2 Location RPC is READY"
       ret=0
-      echo "SCM location protocol (Engine2) is ready"
     else
-      echo "Waiting for SCM location protocol to warm up... (attempt $((attempt+1))/$max_attempts)"
+      echo "Waiting for Engine2 RPC handshake... ($((attempt+1))/$max_attempts)"
       sleep 2
       attempt=$((attempt+1))
     fi
