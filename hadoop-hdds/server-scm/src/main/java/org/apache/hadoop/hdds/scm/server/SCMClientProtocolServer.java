@@ -187,6 +187,12 @@ public class SCMClientProtocolServer implements
     HddsServerUtil.addPBProtocol(conf, ReconfigureProtocolPB.class,
         reconfigureService, clientRpcServer);
 
+    // ⭐ CRITICAL: Re-set Engine2 after addPBProtocol (which resets ALL engines to v1)
+    // addPBProtocol calls RPC.setProtocolEngine(conf, protocol, ProtobufRpcEngine.class)
+    // which overrides our Engine2 setting. We must re-set it AFTER all addPBProtocol calls.
+    RPC.setProtocolEngine(conf, StorageContainerLocationProtocolPB.class,
+        ProtobufRpcEngine2.class);
+
     clientRpcAddress =
         updateRPCListenAddress(conf,
             scm.getScmNodeDetails().getClientProtocolServerAddressKey(),

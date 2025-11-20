@@ -305,7 +305,7 @@ public abstract class SCMFailoverProxyProviderBase<T> implements FailoverProxyPr
     // ⭐ 關鍵：在這裡強制設定 Engine2
     // 我們不管傳進來的 conf 有沒有設定，我們就在這裡設，因為這是建立 Proxy 前的最後一哩路。
     // 這樣可以攔截所有路徑，包括 CLI, Recon, ContainerOperationClient 等等。
-    if (StorageContainerLocationProtocolPB.class.isAssignableFrom(protocolClass)) {
+    if (StorageContainerLocationProtocolPB.class.equals(protocolClass)) {
       RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine2.class);
     }
     
