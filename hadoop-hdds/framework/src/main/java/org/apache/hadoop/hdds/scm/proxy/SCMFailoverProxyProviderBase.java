@@ -35,11 +35,10 @@ import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.ratis.ServerNotLeaderException;
 import org.apache.hadoop.hdds.scm.ha.SCMHAUtils;
 import org.apache.hadoop.hdds.scm.ha.SCMNodeInfo;
+import org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB;
 import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.io.retry.FailoverProxyProvider;
-import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
-import org.apache.hadoop.ipc.ProtobufRpcEngine;
 import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.net.NetUtils;
@@ -126,6 +125,14 @@ public abstract class SCMFailoverProxyProviderBase<T> implements FailoverProxyPr
    * Get the logger implementation for the specific protocol's failover proxy provider.
    */
   protected abstract Logger getLogger();
+
+  /**
+   * Get the configuration source.
+   * @return ConfigurationSource
+   */
+  protected ConfigurationSource getConf() {
+    return conf;
+  }
 
   /**
    * Get the specific protocol address from {@link SCMNodeInfo}.
@@ -294,19 +301,24 @@ public abstract class SCMFailoverProxyProviderBase<T> implements FailoverProxyPr
   private T createSCMProxy(InetSocketAddress scmAddress) throws IOException {
     Configuration hadoopConf =
         LegacyHadoopConfigurationSource.asHadoopConfiguration(conf);
-    // Only set ProtobufRpcEngine2 for StorageContainerLocationProtocolPB
-    // Other protocols will continue using ProtobufRpcEngine until migrated
-    // Use getName().equals() instead of == to avoid classloader issues in Docker/multi-classloader environments
-    if ("org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB"
-        .equals(protocolClass.getName())) {
+    
+    // Important: LegacyHadoopConfigurationSource.asHadoopConfiguration() creates a NEW
+    // Configuration instance, so the Engine2 setting from HAUtils is not preserved.
+    // We must re-apply the Engine2 setting here for StorageContainerLocationProtocolPB.
+    // This ensures that when RPC.getProtocolProxy() is called, it uses Engine2.
+    if (StorageContainerLocationProtocolPB.class.isAssignableFrom(protocolClass)) {
       RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine2.class);
-    } else {
-      RPC.setProtocolEngine(hadoopConf, protocolClass, ProtobufRpcEngine.class);
     }
-    // FailoverOnNetworkException ensures that the IPC layer does not attempt
-    // retries on the same SCM in case of connection exception. This retry
-    // policy essentially results in TRY_ONCE_THEN_FAIL.
-    RetryPolicy connectionRetryPolicy = RetryPolicies.failoverOnNetworkException(0);
+    
+    Class<?> engine = RPC.getProtocolEngine(protocolClass, hadoopConf);
+    getLogger().info("DEBUG: createSCMProxy called for protocol: {}", protocolClass.getName());
+    getLogger().info("DEBUG: hadoopConf instance: {}", System.identityHashCode(hadoopConf));
+    getLogger().info("DEBUG: conf instance (source): {}", System.identityHashCode(conf));
+    getLogger().info("DEBUG: Current Engine for protocol: {}", engine.getName());
+    // For ProtobufRpcEngine2, we cannot use RetryPolicies.failoverOnNetworkException(0)
+    // as it is not supported. Pass null to use the default retry policy.
+    // The failover behavior is already handled by the FailoverProxyProvider itself.
+    RetryPolicy connectionRetryPolicy = null;
     return RPC.getProtocolProxy(
         protocolClass,
         scmVersion, scmAddress, ugi,

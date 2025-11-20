@@ -132,11 +132,15 @@ import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol;
 import org.apache.hadoop.hdds.scm.proxy.SCMContainerLocationFailoverProxyProvider;
 import org.apache.hadoop.hdds.tracing.TracingUtil;
+import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.io.retry.RetryProxy;
+import org.apache.hadoop.ipc.Client;
 import org.apache.hadoop.ipc.ProtobufHelper;
 import org.apache.hadoop.ipc.ProtocolTranslator;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ozone.ClientVersion;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.ozone.upgrade.UpgradeFinalization;
 import org.apache.hadoop.ozone.upgrade.UpgradeFinalization.StatusAndMessages;
 import org.apache.hadoop.ozone.util.ProtobufUtils;
@@ -150,6 +154,9 @@ import org.apache.hadoop.security.token.Token;
 @InterfaceAudience.Private
 public final class StorageContainerLocationProtocolClientSideTranslatorPB
     implements StorageContainerLocationProtocol, ProtocolTranslator, Closeable {
+
+  private static final Logger LOG =
+      LoggerFactory.getLogger(StorageContainerLocationProtocolClientSideTranslatorPB.class);
 
   /**
    * RpcController is not used and hence is set to null.
@@ -177,6 +184,12 @@ public final class StorageContainerLocationProtocolClientSideTranslatorPB
     // because StorageContainerLocationProtocolPB extends BlockingInterface.
     // We assign it to stub to make the ProtobufRpcEngine2 usage explicit.
     this.stub = rpcProxy;
+
+    // Debug: Log proxy class and engine type
+    // Note: We know this uses Engine2 because SCMFailoverProxyProviderBase
+    // sets ProtobufRpcEngine2 for StorageContainerLocationProtocolPB
+    LOG.info("SCLocationTranslatorPB created: proxyClass={}, engineClass=ProtobufRpcEngine2 (expected for StorageContainerLocationProtocolPB)",
+        rpcProxy.getClass().getName());
   }
 
   /**

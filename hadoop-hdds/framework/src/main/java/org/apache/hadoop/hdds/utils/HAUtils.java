@@ -52,7 +52,10 @@ import org.apache.hadoop.hdds.scm.protocol.ScmBlockLocationProtocol;
 import org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol;
 import org.apache.hadoop.hdds.scm.protocolPB.ScmBlockLocationProtocolClientSideTranslatorPB;
 import org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolClientSideTranslatorPB;
+import org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolPB;
 import org.apache.hadoop.hdds.scm.proxy.SCMBlockLocationFailoverProxyProvider;
+import org.apache.hadoop.ipc.ProtobufRpcEngine2;
+import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.hdds.scm.proxy.SCMClientConfig;
 import org.apache.hadoop.hdds.scm.proxy.SCMContainerLocationFailoverProxyProvider;
 import org.apache.hadoop.hdds.security.exception.SCMSecurityException;
@@ -139,25 +142,54 @@ public final class HAUtils {
 
   public static StorageContainerLocationProtocol getScmContainerClient(
       ConfigurationSource conf) {
+    // Unify configuration instance: use the same instance throughout the RPC call chain.
+    // This is critical because RPC.setProtocolEngine() stores engine settings in the
+    // configuration instance, and RPC.getProtocolProxy() reads from the same instance.
+    // If we use different instances, the engine override will not be effective.
+    OzoneConfiguration ozoneConf = (conf instanceof OzoneConfiguration)
+        ? (OzoneConfiguration) conf
+        : OzoneConfiguration.of(conf);
+    
+    // Set ProtobufRpcEngine2 for StorageContainerLocationProtocolPB
+    // This override MUST be applied to the same instance used by proxy provider,
+    // translator, and RPC.getProtocolProxy().
+    RPC.setProtocolEngine(ozoneConf, StorageContainerLocationProtocolPB.class,
+        ProtobufRpcEngine2.class);
+    
+    // Use the unified ozoneConf instance for all subsequent calls
     SCMContainerLocationFailoverProxyProvider proxyProvider =
-        new SCMContainerLocationFailoverProxyProvider(conf, null);
+        new SCMContainerLocationFailoverProxyProvider(ozoneConf, null);
     StorageContainerLocationProtocol scmContainerClient =
         TracingUtil.createProxy(
             new StorageContainerLocationProtocolClientSideTranslatorPB(
-                proxyProvider), StorageContainerLocationProtocol.class, conf);
+                proxyProvider), StorageContainerLocationProtocol.class, ozoneConf);
     return scmContainerClient;
   }
 
   @VisibleForTesting
   public static StorageContainerLocationProtocol getScmContainerClient(
       ConfigurationSource conf, UserGroupInformation userGroupInformation) {
+    // Unify configuration instance: use the same instance throughout the RPC call chain.
+    // This is critical because RPC.setProtocolEngine() stores engine settings in the
+    // configuration instance, and RPC.getProtocolProxy() reads from the same instance.
+    OzoneConfiguration ozoneConf = (conf instanceof OzoneConfiguration)
+        ? (OzoneConfiguration) conf
+        : OzoneConfiguration.of(conf);
+    
+    // Set ProtobufRpcEngine2 for StorageContainerLocationProtocolPB
+    // This override MUST be applied to the same instance used by proxy provider,
+    // translator, and RPC.getProtocolProxy().
+    RPC.setProtocolEngine(ozoneConf, StorageContainerLocationProtocolPB.class,
+        ProtobufRpcEngine2.class);
+    
+    // Use the unified ozoneConf instance for all subsequent calls
     SCMContainerLocationFailoverProxyProvider proxyProvider =
-        new SCMContainerLocationFailoverProxyProvider(conf,
+        new SCMContainerLocationFailoverProxyProvider(ozoneConf,
             userGroupInformation);
     StorageContainerLocationProtocol scmContainerClient =
         TracingUtil.createProxy(
             new StorageContainerLocationProtocolClientSideTranslatorPB(
-                proxyProvider), StorageContainerLocationProtocol.class, conf);
+                proxyProvider), StorageContainerLocationProtocol.class, ozoneConf);
     return scmContainerClient;
   }
 
