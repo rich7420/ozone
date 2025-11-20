@@ -154,6 +154,11 @@ public class SCMClientProtocolServer implements
             "SCM ContainerLocation protocol metrics",
             StorageContainerLocationProtocolProtos.Type.values());
 
+    // ⭐ KEY FIX: Set ProtobufRpcEngine2 BEFORE creating any servers
+    // For ProtobufRpcEngine2, the engine must be set BEFORE RPC.Builder.build()
+    RPC.setProtocolEngine(conf, StorageContainerLocationProtocolPB.class,
+        ProtobufRpcEngine2.class);
+
     // SCM Container Service RPC - Use builder-based server with ProtobufRpcEngine2
     StorageContainerLocationProtocolServerSideTranslatorPB serverImpl =
         new StorageContainerLocationProtocolServerSideTranslatorPB(this,
@@ -173,12 +178,7 @@ public class SCMClientProtocolServer implements
         .setSecretManager(null)
         .build();
 
-    // addPBProtocol() ALWAYS overwrites the RPC engine to ProtobufRpcEngine (v1)
-    // We need to call it for protocols that require reflective BlockingService
-    // (like ReconfigureProtocolPB), but it will reset Engine2 if called for
-    // StorageContainerLocationProtocolPB. So we must override Engine2 AFTER
-    // all addPBProtocol() calls.
-    // Add reconfigureProtocolService.
+    // Add reconfigureProtocolService (uses ProtobufRpcEngine v1)
     ReconfigureProtocolServerSideTranslatorPB reconfigureServerProtocol
         = new ReconfigureProtocolServerSideTranslatorPB(reconfigurationHandler);
     BlockingService reconfigureService =
@@ -186,12 +186,6 @@ public class SCMClientProtocolServer implements
             reconfigureServerProtocol);
     HddsServerUtil.addPBProtocol(conf, ReconfigureProtocolPB.class,
         reconfigureService, clientRpcServer);
-
-    // NOW override Engine2 for StorageContainerLocationProtocolPB only
-    // This must come AFTER addPBProtocol() to ensure Engine2 is not overwritten
-    // Other protocols (ReconfigureProtocolPB, Security, etc.) will use Engine1
-    RPC.setProtocolEngine(conf, StorageContainerLocationProtocolPB.class,
-        ProtobufRpcEngine2.class);
 
     clientRpcAddress =
         updateRPCListenAddress(conf,
