@@ -19,6 +19,7 @@ package org.apache.hadoop.ozone.om.helpers;
 
 import static org.apache.hadoop.ozone.OzoneConsts.OM_KEY_PREFIX;
 import static org.apache.hadoop.ozone.OzoneConsts.OZONE_URI_DELIMITER;
+import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.INVALID_KEY_NAME;
 
 import jakarta.annotation.Nonnull;
 import java.nio.file.Paths;
@@ -26,6 +27,7 @@ import java.util.UUID;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
+import org.apache.hadoop.ozone.om.exceptions.OMException;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Time;
 import org.slf4j.Logger;
@@ -123,6 +125,55 @@ public final class OzoneFSUtils {
       }
     }
     return true;
+  }
+
+  /**
+   * Validates key path. Checks for invalid characters: ":", ".", "..", "//".
+   * Path must be relative (not start with "/").
+   * 
+   * @param path the key path to validate
+   * @param throwOnEmpty if true, throws OMException when path is empty;
+   *                     if false, returns empty path
+   * @return the validated path if valid
+   * @throws OMException if the path is invalid or empty (when throwOnEmpty is true)
+   */
+  public static String isValidKeyPath(String path, boolean throwOnEmpty)
+      throws OMException {
+    boolean isValid = true;
+
+    if (path.isEmpty()) {
+      if (throwOnEmpty) {
+        throw new OMException("Invalid KeyPath, empty keyName" + path,
+            INVALID_KEY_NAME);
+      } else {
+        return path;
+      }
+    } else if (path.startsWith("/")) {
+      isValid = false;
+    } else {
+      // Check for invalid characters: "..", ".", ":", "/"
+      String[] components = StringUtils.split(path, '/');
+      for (int i = 0; i < components.length; i++) {
+        String element = components[i];
+        if (element.equals(".") ||
+            (element.contains(":")) ||
+            (element.contains("/") || element.equals(".."))) {
+          isValid = false;
+          break;
+        }
+
+        // Path may end with "/", but not have "//" in the middle
+        if (element.isEmpty() && i != components.length - 1) {
+          isValid = false;
+        }
+      }
+    }
+
+    if (isValid) {
+      return path;
+    } else {
+      throw new OMException("Invalid KeyPath " + path, INVALID_KEY_NAME);
+    }
   }
 
   /**
