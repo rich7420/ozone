@@ -185,7 +185,6 @@ public abstract class GenericTestUtils {
           throws NoSuchFieldException, IllegalAccessException {
     Field field = object.getClass().getDeclaredField(fieldName);
     boolean isAccessible = field.isAccessible();
-
     field.setAccessible(true);
     Field modifiersField = ReflectionUtils.getModifiersField();
     boolean modifierFieldAccessible = modifiersField.isAccessible();
@@ -205,7 +204,6 @@ public abstract class GenericTestUtils {
           throws NoSuchFieldException, IllegalAccessException {
     Field field = object.getClass().getDeclaredField(fieldName);
     boolean isAccessible = field.isAccessible();
-
     field.setAccessible(true);
     Field modifiersField = ReflectionUtils.getModifiersField();
     boolean modifierFieldAccessible = modifiersField.isAccessible();
@@ -286,20 +284,18 @@ public abstract class GenericTestUtils {
 
   /** Capture contents of a {@code PrintStream}, until {@code close()}d. */
   public abstract static class PrintStreamCapturer implements AutoCloseable, Supplier<String> {
-    private final ByteArrayOutputStream bytes;
-    private final PrintStream bytesPrintStream;
+    private final TeePrintStream tee;
     private final PrintStream old;
     private final Consumer<PrintStream> restore;
 
     protected PrintStreamCapturer(PrintStream out, Consumer<PrintStream> install) {
       old = out;
-      bytes = new ByteArrayOutputStream();
       try {
-        bytesPrintStream = new PrintStream(bytes, false, UTF_8.name());
-        install.accept(new TeePrintStream(out, bytesPrintStream));
+        tee = new TeePrintStream(out);
+        install.accept(tee);
         restore = install;
       } catch (UnsupportedEncodingException e) {
-        throw new IllegalStateException(e);
+        throw new IllegalStateException("UTF-8 encoding not supported", e);
       }
     }
 
@@ -309,21 +305,17 @@ public abstract class GenericTestUtils {
     }
 
     public String getOutput() {
-      try {
-        return bytes.toString(UTF_8.name());
-      } catch (UnsupportedEncodingException e) {
-        throw new IllegalStateException(e);
-      }
+      return tee.getCapturedOutput();
     }
 
     public void reset() {
-      bytes.reset();
+      tee.resetCapture();
     }
 
     @Override
     public void close() throws Exception {
-      IOUtils.closeQuietly(bytesPrintStream);
       restore.accept(old);
+      tee.closeCapture();
     }
   }
 
@@ -380,24 +372,36 @@ public abstract class GenericTestUtils {
    * Closing the main {@link PrintStream} will NOT close the other.
    */
   public static class TeePrintStream extends PrintStream {
-    private final PrintStream other;
+    private final ByteArrayOutputStream capturedBytes = new ByteArrayOutputStream();
+    private final PrintStream capture;
 
-    public TeePrintStream(OutputStream main, PrintStream other)
-        throws UnsupportedEncodingException {
+    public TeePrintStream(OutputStream main) throws UnsupportedEncodingException {
       super(main, false, UTF_8.name());
-      this.other = other;
+      capture = new PrintStream(capturedBytes, false, UTF_8.name());
+    }
+
+    public String getCapturedOutput() {
+      return new String(capturedBytes.toByteArray(), UTF_8);
+    }
+
+    public void resetCapture() {
+      capturedBytes.reset();
+    }
+
+    void closeCapture() {
+      IOUtils.closeQuietly(capture);
     }
 
     @Override
     public void flush() {
       super.flush();
-      other.flush();
+      capture.flush();
     }
 
     @Override
     public void write(byte[] buf, int off, int len) {
       super.write(buf, off, len);
-      other.write(buf, off, len);
+      capture.write(buf, off, len);
     }
   }
 

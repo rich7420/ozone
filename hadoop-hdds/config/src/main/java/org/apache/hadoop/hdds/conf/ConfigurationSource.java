@@ -164,8 +164,8 @@ public interface ConfigurationSource {
     T configObject;
 
     try {
-      configObject = configurationClass.newInstance();
-    } catch (InstantiationException | IllegalAccessException e) {
+      configObject = configurationClass.getDeclaredConstructor().newInstance();
+    } catch (ReflectiveOperationException e) {
       throw new ConfigurationException(
           "Configuration class can't be created: " + configurationClass, e);
     }

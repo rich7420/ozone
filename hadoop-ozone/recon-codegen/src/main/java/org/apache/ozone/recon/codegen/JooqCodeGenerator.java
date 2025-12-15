@@ -25,6 +25,8 @@ import com.google.inject.Provider;
 import java.io.File;
 import java.nio.file.Paths;
 import java.sql.SQLException;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
 import javax.sql.DataSource;
 import org.apache.commons.io.FileUtils;
@@ -66,7 +68,8 @@ public class JooqCodeGenerator {
 
   @Inject
   public JooqCodeGenerator(Set<ReconSchemaDefinition> allDefinitions) {
-    this.allDefinitions = allDefinitions;
+    // Defensive copy to avoid exposing internal representation (SpotBugs EI2).
+    this.allDefinitions = Collections.unmodifiableSet(new HashSet<>(allDefinitions));
   }
 
   /**

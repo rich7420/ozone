@@ -45,15 +45,30 @@ public class ConfigFileAppender {
   private Document document;
 
   private final DocumentBuilder builder;
+  private final Exception builderInitException;
 
   public ConfigFileAppender() {
+    DocumentBuilder b = null;
+    Exception err = null;
     try {
       DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
       factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-      builder = factory.newDocumentBuilder();
+      b = factory.newDocumentBuilder();
     } catch (Exception ex) {
-      throw new ConfigurationException("Can initialize new configuration", ex);
+      // Avoid throwing from the constructor (SpotBugs CT_CONSTRUCTOR_THROW).
+      // Fail fast on first use, preserving the original exception.
+      err = ex;
     }
+    builder = b;
+    builderInitException = err;
+  }
+
+  private DocumentBuilder getBuilder() {
+    if (builder == null) {
+      throw new ConfigurationException("Can initialize new configuration",
+          builderInitException);
+    }
+    return builder;
   }
 
   /**
@@ -61,7 +76,7 @@ public class ConfigFileAppender {
    */
   public void init() {
     try {
-      document = builder.newDocument();
+      document = getBuilder().newDocument();
       document.appendChild(document.createElement("configuration"));
     } catch (Exception ex) {
       throw new ConfigurationException("Can initialize new configuration", ex);
@@ -73,7 +88,7 @@ public class ConfigFileAppender {
    */
   public void load(InputStream stream) {
     try {
-      document = builder.parse(stream);
+      document = getBuilder().parse(stream);
     } catch (Exception ex) {
       throw new ConfigurationException("Can't load existing configuration", ex);
     }

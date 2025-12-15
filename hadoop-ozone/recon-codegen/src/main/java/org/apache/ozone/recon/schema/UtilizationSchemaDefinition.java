@@ -112,6 +112,8 @@ public class UtilizationSchemaDefinition implements ReconSchemaDefinition {
    * @return dslContext
    */
   public DSLContext getDSLContext() {
-    return dslContext;
+    // Return a new DSLContext wrapper instead of the internal field to avoid
+    // exposing internal representation (SpotBugs EI_EXPOSE_REP).
+    return DSL.using(dslContext.configuration());
   }
 }
