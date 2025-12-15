@@ -52,6 +52,7 @@ import org.apache.ratis.util.function.CheckedSupplier;
 import org.junit.jupiter.api.Assertions;
 import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 /**
  * Provides some very generic helpers which might be used across the tests.
@@ -181,6 +182,8 @@ public abstract class GenericTestUtils {
     }
   }
 
+  @SuppressFBWarnings(value = "REFLF_REFLECTION_MAY_INCREASE_ACCESSIBILITY_OF_FIELD",
+      justification = "Test utility method that intentionally uses reflection to access fields")
   public static <T> T mockFieldReflection(Object object, String fieldName)
           throws NoSuchFieldException, IllegalAccessException {
     Field field = object.getClass().getDeclaredField(fieldName);
@@ -200,6 +203,8 @@ public abstract class GenericTestUtils {
     return value;
   }
 
+  @SuppressFBWarnings(value = "REFLF_REFLECTION_MAY_INCREASE_ACCESSIBILITY_OF_FIELD",
+      justification = "Test utility method that intentionally uses reflection to access fields")
   public static <T> T getFieldReflection(Object object, String fieldName)
           throws NoSuchFieldException, IllegalAccessException {
     Field field = object.getClass().getDeclaredField(fieldName);
@@ -288,6 +293,8 @@ public abstract class GenericTestUtils {
     private final PrintStream old;
     private final Consumer<PrintStream> restore;
 
+    @SuppressFBWarnings(value = "CT_CONSTRUCTOR_THROW",
+        justification = "Test utility class constructor that intentionally throws runtime exception for unsupported encoding")
     protected PrintStreamCapturer(PrintStream out, Consumer<PrintStream> install) {
       old = out;
       try {
