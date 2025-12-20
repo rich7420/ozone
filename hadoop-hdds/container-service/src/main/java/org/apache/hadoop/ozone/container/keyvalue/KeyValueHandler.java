@@ -1853,10 +1853,13 @@ public class KeyValueHandler extends Handler {
         .build();
     // Under construction is set here, during BlockInputStream#initialize() it is used to update the block length.
     blkInfo.setUnderConstruction(true);
-    try (BlockInputStream blockInputStream = (BlockInputStream) blockInputStreamFactory.create(
-        RatisReplicationConfig.getInstance(HddsProtos.ReplicationFactor.ONE),
+    // For reconciliation, we need chunk-level access which is only available in BlockInputStream.
+    // StreamBlockInputStream doesn't support chunk-level operations, so we directly create BlockInputStream
+    // instead of using the factory which might return StreamBlockInputStream when stream read is enabled.
+    OzoneClientConfig clientConfig = conf.getObject(OzoneClientConfig.class);
+    try (BlockInputStream blockInputStream = new BlockInputStream(
         blkInfo, pipeline, blockToken, dnClient.getXceiverClientManager(),
-        null, conf.getObject(OzoneClientConfig.class))) {
+        null, clientConfig)) {
       // Initialize the BlockInputStream. Gets the blockData from the peer, sets the block length and
       // initializes ChunkInputStream for each chunk.
       blockInputStream.initialize();
