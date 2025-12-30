@@ -19,6 +19,7 @@ package org.apache.hadoop.ozone.s3.signature;
 
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.S3_AUTHINFO_CREATION_ERROR;
 import static org.apache.hadoop.ozone.s3.signature.SignatureProcessor.DATE_FORMATTER;
+import static org.apache.hadoop.ozone.s3.signature.StringToSignProducer.EMPTY_PAYLOAD_SHA256;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.STREAMING_AWS4_HMAC_SHA256_PAYLOAD;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.UNSIGNED_PAYLOAD;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_CONTENT_SHA256;
@@ -282,7 +283,7 @@ public class TestStringToSignProducer {
     md.update(payload.getBytes(StandardCharsets.UTF_8));
     String correctHash = Hex.encode(md.digest()).toLowerCase();
     String wrongHash = "0000000000000000000000000000000000000000000000000000000000000000";
-    String emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    String emptyHash = EMPTY_PAYLOAD_SHA256;
 
     return Stream.of(
         // Valid payload SHA256 - should succeed

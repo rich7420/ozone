@@ -61,6 +61,9 @@ import org.slf4j.LoggerFactory;
 public final class StringToSignProducer {
 
   public static final String X_AMAZ_DATE = "x-amz-date";
+  /** SHA256 hash of empty string for x-amz-content-sha256 header. */
+  public static final String EMPTY_PAYLOAD_SHA256 =
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
   private static final Logger LOG =
       LoggerFactory.getLogger(StringToSignProducer.class);
   private static final Charset UTF_8 = StandardCharsets.UTF_8;
@@ -389,7 +392,6 @@ public final class StringToSignProducer {
 
   /**
    * Validates payload SHA256 for V4 signed requests.
-   * Called before building canonical request.
    *
    * @param context the request context
    * @param signatureInfo the signature information
@@ -413,9 +415,12 @@ public final class StringToSignProducer {
     }
 
     if (!context.hasEntity()) {
-      if (!UNSIGNED_PAYLOAD.equals(contentSha256)) {
+      // For requests without body, x-amz-content-sha256 must be
+      // UNSIGNED-PAYLOAD or EMPTY_PAYLOAD_SHA256
+      if (!UNSIGNED_PAYLOAD.equals(contentSha256) &&
+          !EMPTY_PAYLOAD_SHA256.equalsIgnoreCase(contentSha256)) {
         LOG.error("Request has no body but x-amz-content-sha256 is not "
-            + "UNSIGNED-PAYLOAD: {}", contentSha256);
+            + "UNSIGNED-PAYLOAD or empty payload hash: {}", contentSha256);
         throw S3_AUTHINFO_CREATION_ERROR;
       }
       return;
@@ -430,7 +435,8 @@ public final class StringToSignProducer {
       MessageDigest md = MessageDigest.getInstance("SHA-256");
       DigestInputStream digestStream = new DigestInputStream(entityStream, md);
       byte[] payload = readEntityStream(digestStream);
-      String calculatedHash = Hex.encode(digestStream.getMessageDigest().digest()).toLowerCase();
+      String calculatedHash = Hex.encode(digestStream.getMessageDigest().digest())
+          .toLowerCase();
 
       if (!calculatedHash.equalsIgnoreCase(contentSha256)) {
         LOG.error("Payload SHA256 mismatch. Expected: {}, Calculated: {}",
@@ -438,6 +444,7 @@ public final class StringToSignProducer {
         throw S3_AUTHINFO_CREATION_ERROR;
       }
 
+      // Reset entity stream for subsequent endpoints
       context.setEntityStream(new ByteArrayInputStream(payload));
 
     } catch (IOException e) {
@@ -453,7 +460,7 @@ public final class StringToSignProducer {
    * Checks if header value indicates unsigned or streaming payload.
    *
    * @param headerValue the x-amz-content-sha256 header value
-   * @return true if it's UNSIGNED-PAYLOAD or streaming payload
+   * @return true if UNSIGNED-PAYLOAD or starts with "STREAMING-"
    */
   private static boolean isUnsignedOrStreamingPayload(String headerValue) {
     return UNSIGNED_PAYLOAD.equals(headerValue) ||
@@ -464,7 +471,7 @@ public final class StringToSignProducer {
    * Reads all data from input stream into a byte array.
    *
    * @param inputStream the input stream to read from
-   * @return the byte array containing all data
+   * @return byte array containing all data
    * @throws IOException if reading fails
    */
   private static byte[] readEntityStream(InputStream inputStream)

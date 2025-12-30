@@ -26,6 +26,7 @@ import static org.apache.hadoop.ozone.s3.signature.SignatureParser.AUTHORIZATION
 import static org.apache.hadoop.ozone.s3.signature.SignatureProcessor.CONTENT_MD5;
 import static org.apache.hadoop.ozone.s3.signature.SignatureProcessor.CONTENT_TYPE;
 import static org.apache.hadoop.ozone.s3.signature.SignatureProcessor.HOST_HEADER;
+import static org.apache.hadoop.ozone.s3.signature.StringToSignProducer.EMPTY_PAYLOAD_SHA256;
 import static org.apache.hadoop.ozone.s3.signature.StringToSignProducer.X_AMAZ_DATE;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_CONTENT_SHA256;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -96,7 +97,7 @@ public class TestAuthorizationFilter {
                 "e06b5924a6f2b5d7",
             "",
             "iam.amazonaws.com",
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            EMPTY_PAYLOAD_SHA256,
             "20150830T123600Z",
             "application/x-www-form-urlencoded; charset=utf-8",
             "",
