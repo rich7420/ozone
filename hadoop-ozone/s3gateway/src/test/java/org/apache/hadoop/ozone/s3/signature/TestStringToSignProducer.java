@@ -19,11 +19,17 @@ package org.apache.hadoop.ozone.s3.signature;
 
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.S3_AUTHINFO_CREATION_ERROR;
 import static org.apache.hadoop.ozone.s3.signature.SignatureProcessor.DATE_FORMATTER;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.STREAMING_AWS4_HMAC_SHA256_PAYLOAD;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.UNSIGNED_PAYLOAD;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_CONTENT_SHA256;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -268,5 +274,103 @@ public class TestStringToSignProducer {
     }
 
     assertEquals(expectedResult, actualResult);
+  }
+
+  private static Stream<Arguments> testPayloadSha256ValidationInput() throws Exception {
+    String payload = "test payload content";
+    MessageDigest md = MessageDigest.getInstance("SHA-256");
+    md.update(payload.getBytes(StandardCharsets.UTF_8));
+    String correctHash = Hex.encode(md.digest()).toLowerCase();
+    String wrongHash = "0000000000000000000000000000000000000000000000000000000000000000";
+    String emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    return Stream.of(
+        // Valid payload SHA256 - should succeed
+        arguments("PUT", payload, correctHash, true, "success"),
+        // Invalid payload SHA256 - should fail
+        arguments("PUT", payload, wrongHash, true, S3_AUTHINFO_CREATION_ERROR.getCode()),
+        // UNSIGNED-PAYLOAD - should skip validation
+        arguments("PUT", payload, UNSIGNED_PAYLOAD, true, "success"),
+        // Streaming payload - should skip validation
+        arguments("PUT", payload, STREAMING_AWS4_HMAC_SHA256_PAYLOAD, true, "success"),
+        // No body with UNSIGNED-PAYLOAD - should succeed
+        arguments("GET", null, UNSIGNED_PAYLOAD, false, "success"),
+        // No body with actual hash - should fail
+        arguments("GET", null, correctHash, false, S3_AUTHINFO_CREATION_ERROR.getCode()),
+        // Empty payload with correct hash - should succeed
+        arguments("PUT", "", emptyHash, true, "success")
+    );
+  }
+
+  @ParameterizedTest
+  @MethodSource("testPayloadSha256ValidationInput")
+  public void testPayloadSha256Validation(
+      String method,
+      String payload,
+      String contentSha256,
+      boolean hasEntity,
+      String expectedResult) throws Exception {
+    MultivaluedMap<String, String> headerMap = createV4AuthHeaders(contentSha256);
+    InputStream entityStream = payload != null
+        ? new ByteArrayInputStream(payload.getBytes(StandardCharsets.UTF_8))
+        : null;
+    ContainerRequestContext context = setupContextWithEntity(
+        new URI("https://0.0.0.0:9878/"),
+        method,
+        headerMap,
+        new MultivaluedHashMap<>(),
+        entityStream,
+        hasEntity);
+
+    SignatureInfo signatureInfo = new AuthorizationV4HeaderParser(
+        headerMap.getFirst("Authorization"),
+        headerMap.getFirst("X-Amz-Date")).parseSignature();
+    signatureInfo.setUnfilteredURI("/");
+
+    String actualResult = "success";
+    try {
+      StringToSignProducer.createSignatureBase(signatureInfo, context);
+    } catch (OS3Exception e) {
+      actualResult = e.getCode();
+    }
+
+    assertEquals(expectedResult, actualResult);
+  }
+
+  private MultivaluedMap<String, String> createV4AuthHeaders(String contentSha256) {
+    String authHeader = "AWS4-HMAC-SHA256 Credential=ozone/"
+        + DATE_FORMATTER.format(LocalDate.now())
+        + "/us-east-1/s3/aws4_request, "
+        + "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date,"
+        + " Signature=db81b057718d7c1b3b8dffa29933099551c51d787b3b13b9e0f9ebed45982bf2";
+    MultivaluedMap<String, String> headerMap = new MultivaluedHashMap<>();
+    headerMap.putSingle("Authorization", authHeader);
+    headerMap.putSingle("Content-Type", "application/octet-stream");
+    headerMap.putSingle("Host", "0.0.0.0:9878");
+    headerMap.putSingle(X_AMZ_CONTENT_SHA256, contentSha256);
+    headerMap.putSingle("X-Amz-Date", DATETIME);
+    return headerMap;
+  }
+
+  private ContainerRequestContext setupContextWithEntity(
+      URI uri,
+      String method,
+      MultivaluedMap<String, String> headerMap,
+      MultivaluedMap<String, String> queryMap,
+      InputStream entityStream,
+      boolean hasEntity) {
+    ContainerRequestContext context = mock(ContainerRequestContext.class);
+    UriInfo uriInfo = mock(UriInfo.class);
+
+    when(uriInfo.getRequestUri()).thenReturn(uri);
+    when(uriInfo.getQueryParameters()).thenReturn(queryMap);
+    when(context.getUriInfo()).thenReturn(uriInfo);
+    when(context.getMethod()).thenReturn(method);
+    when(context.getHeaders()).thenReturn(headerMap);
+    when(context.hasEntity()).thenReturn(hasEntity);
+    when(context.getEntityStream()).thenReturn(hasEntity ? entityStream : null);
+    doNothing().when(context).setEntityStream(org.mockito.ArgumentMatchers.any(InputStream.class));
+
+    return context;
   }
 }

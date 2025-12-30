@@ -23,9 +23,14 @@ import static org.apache.hadoop.ozone.s3.util.S3Consts.UNSIGNED_PAYLOAD;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_CONTENT_SHA256;
 
 import com.google.common.annotations.VisibleForTesting;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
@@ -77,6 +82,7 @@ public final class StringToSignProducer {
       SignatureInfo signatureInfo,
       ContainerRequestContext context
   ) throws Exception {
+    validatePayloadSha256IfNeeded(context, signatureInfo);
     return createSignatureBase(signatureInfo,
         context.getUriInfo().getRequestUri().getScheme(),
         context.getMethod(),
@@ -337,7 +343,7 @@ public final class StringToSignProducer {
       }
       break;
     case X_AMZ_CONTENT_SHA256:
-      // TODO: Construct request payload and match HEX(SHA256(requestPayload))
+      // Verified in createSignatureBase before building canonical request
       break;
     default:
       break;
@@ -379,6 +385,97 @@ public final class StringToSignProducer {
         throw S3_AUTHINFO_CREATION_ERROR;
       }
     }
+  }
+
+  /**
+   * Validates payload SHA256 for V4 signed requests.
+   * Called before building canonical request.
+   *
+   * @param context the request context
+   * @param signatureInfo the signature information
+   * @throws OS3Exception if validation fails
+   */
+  private static void validatePayloadSha256IfNeeded(
+      ContainerRequestContext context,
+      SignatureInfo signatureInfo) throws OS3Exception {
+    if (signatureInfo.getVersion() != SignatureInfo.Version.V4 ||
+        !signatureInfo.isSignPayload()) {
+      return;
+    }
+
+    LowerCaseKeyStringMap headers =
+        LowerCaseKeyStringMap.fromHeaderMap(context.getHeaders());
+    String contentSha256 = headers.get(X_AMZ_CONTENT_SHA256);
+
+    if (contentSha256 == null ||
+        isUnsignedOrStreamingPayload(contentSha256)) {
+      return;
+    }
+
+    if (!context.hasEntity()) {
+      if (!UNSIGNED_PAYLOAD.equals(contentSha256)) {
+        LOG.error("Request has no body but x-amz-content-sha256 is not "
+            + "UNSIGNED-PAYLOAD: {}", contentSha256);
+        throw S3_AUTHINFO_CREATION_ERROR;
+      }
+      return;
+    }
+
+    try {
+      InputStream entityStream = context.getEntityStream();
+      if (entityStream == null) {
+        return;
+      }
+
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      DigestInputStream digestStream = new DigestInputStream(entityStream, md);
+      byte[] payload = readEntityStream(digestStream);
+      String calculatedHash = Hex.encode(digestStream.getMessageDigest().digest()).toLowerCase();
+
+      if (!calculatedHash.equalsIgnoreCase(contentSha256)) {
+        LOG.error("Payload SHA256 mismatch. Expected: {}, Calculated: {}",
+            contentSha256, calculatedHash);
+        throw S3_AUTHINFO_CREATION_ERROR;
+      }
+
+      context.setEntityStream(new ByteArrayInputStream(payload));
+
+    } catch (IOException e) {
+      LOG.error("Failed to read payload for SHA256 verification", e);
+      throw S3_AUTHINFO_CREATION_ERROR;
+    } catch (NoSuchAlgorithmException e) {
+      LOG.error("SHA-256 algorithm not available", e);
+      throw S3_AUTHINFO_CREATION_ERROR;
+    }
+  }
+
+  /**
+   * Checks if header value indicates unsigned or streaming payload.
+   *
+   * @param headerValue the x-amz-content-sha256 header value
+   * @return true if it's UNSIGNED-PAYLOAD or streaming payload
+   */
+  private static boolean isUnsignedOrStreamingPayload(String headerValue) {
+    return UNSIGNED_PAYLOAD.equals(headerValue) ||
+        (headerValue != null && headerValue.startsWith("STREAMING-"));
+  }
+
+  /**
+   * Reads all data from input stream into a byte array.
+   *
+   * @param inputStream the input stream to read from
+   * @return the byte array containing all data
+   * @throws IOException if reading fails
+   */
+  private static byte[] readEntityStream(InputStream inputStream)
+      throws IOException {
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    byte[] buffer = new byte[8192];
+    int bytesRead;
+    while ((bytesRead = inputStream.read(buffer)) != -1) {
+      baos.write(buffer, 0, bytesRead);
+    }
+    return baos.toByteArray();
   }
 
 }
