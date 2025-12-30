@@ -476,6 +476,65 @@ class TestObjectPut {
   }
 
   @Test
+  void testCopyObjectWithStorageTypeChange() throws Exception {
+    // Put object with default replication config (RATIS THREE)
+    assertSucceeds(() -> putObject(CONTENT));
+    
+    OzoneKeyDetails sourceKey = bucket.getKey(KEY_NAME);
+    ReplicationConfig originalRepl = sourceKey.getReplicationConfig();
+    
+    // Verify original replication config is RATIS THREE
+    assertEquals(
+        RatisReplicationConfig.getInstance(HddsProtos.ReplicationFactor.THREE),
+        originalRepl);
+    
+    // Copy to same key with different storage class (STANDARD_IA maps to EC)
+    when(headers.getHeaderString(COPY_SOURCE_HEADER)).thenReturn(
+        BUCKET_NAME + "/" + urlEncode(KEY_NAME));
+    when(headers.getHeaderString(STORAGE_CLASS_HEADER)).thenReturn("STANDARD_IA");
+    
+    assertSucceeds(() -> putObject(CONTENT));
+    
+    // Verify storage type was changed to EC
+    OzoneKeyDetails updatedKey = bucket.getKey(KEY_NAME);
+    ReplicationConfig newRepl = updatedKey.getReplicationConfig();
+    assertThat(newRepl).isInstanceOf(ECReplicationConfig.class);
+    assertThat(newRepl).isNotEqualTo(originalRepl);
+    
+    // Verify content is unchanged
+    assertKeyContent(bucket, KEY_NAME, CONTENT);
+  }
+
+  @Test
+  void testCopyObjectSameSourceDestNoChange() throws Exception {
+    // Put object with custom metadata
+    Map<String, String> customMetadata = ImmutableMap.of("key1", "value1");
+    MultivaluedMap<String, String> metadataHeaders = new MultivaluedHashMap<>();
+    customMetadata.forEach((k, v) -> metadataHeaders.putSingle(
+        CUSTOM_METADATA_HEADER_PREFIX + k, v));
+    when(headers.getRequestHeaders()).thenReturn(metadataHeaders);
+    
+    assertSucceeds(() -> putObject(CONTENT));
+    
+    // Copy to same key with same storage class and metadata (no actual change)
+    when(headers.getHeaderString(COPY_SOURCE_HEADER)).thenReturn(
+        BUCKET_NAME + "/" + urlEncode(KEY_NAME));
+    when(headers.getHeaderString(STORAGE_CLASS_HEADER)).thenReturn("STANDARD");
+    when(headers.getHeaderString(CUSTOM_METADATA_COPY_DIRECTIVE_HEADER))
+        .thenReturn("COPY");
+    
+    Response response = putObject(CONTENT);
+    assertEquals(200, response.getStatus());
+    
+    // Key should remain unchanged (optimization: no rewrite performed)
+    OzoneKeyDetails key = bucket.getKey(KEY_NAME);
+    assertEquals(
+        RatisReplicationConfig.getInstance(HddsProtos.ReplicationFactor.THREE),
+        key.getReplicationConfig());
+    assertThat(key.getMetadata()).containsEntry("key1", "value1");
+  }
+
+  @Test
   void testDirectoryCreation() throws Exception {
     // GIVEN
     final String path = "dir/";

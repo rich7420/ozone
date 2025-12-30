@@ -1214,72 +1214,112 @@ public class ObjectEndpoint extends EndpointBase {
 
     if (S3Owner.hasBucketOwnershipVerificationConditions(getHeaders())) {
       String sourceBucketOwner = volume.getBucket(sourceBucket).getOwner();
-      // The destBucket owner has already been checked in the caller method
       S3Owner.verifyBucketOwnerConditionOnCopyOperation(getHeaders(), sourceBucket, sourceBucketOwner, null, null);
     }
     try {
       OzoneKeyDetails sourceKeyDetails = getClientProtocol().getKeyDetails(
           volume.getName(), sourceBucket, sourceKey);
-      // Checking whether we trying to copying to it self.
-      if (sourceBucket.equals(destBucket) && sourceKey
-          .equals(destkey)) {
-        // When copying to same storage type when storage type is provided,
-        // we should not throw exception, as aws cli checks if any of the
-        // options like storage type are provided or not when source and
-        // dest are given same
-        if (storageTypeDefault) {
-          OS3Exception ex = newError(S3ErrorTable.INVALID_REQUEST, copyHeader);
-          ex.setErrorMessage("This copy request is illegal because it is " +
-              "trying to copy an object to it self itself without changing " +
-              "the object's metadata, storage class, website redirect " +
-              "location or encryption attributes.");
-          throw ex;
-        } else {
-          // TODO: Actually here we should change storage type, as ozone
-          // still does not support this just returning dummy response
-          // for now
-          CopyObjectResponse copyObjectResponse = new CopyObjectResponse();
-          copyObjectResponse.setETag(wrapInQuotes(sourceKeyDetails.getMetadata().get(OzoneConsts.ETAG)));
-          copyObjectResponse.setLastModified(Instant.ofEpochMilli(
-              Time.now()));
-          return copyObjectResponse;
-        }
-      }
-      long sourceKeyLen = sourceKeyDetails.getDataSize();
-
-      // Object tagging in copyObject with tagging directive
       Map<String, String> tags;
       String tagCopyDirective = getHeaders().getHeaderString(TAG_DIRECTIVE_HEADER);
       if (StringUtils.isEmpty(tagCopyDirective) || tagCopyDirective.equals(CopyDirective.COPY.name())) {
-        // Tag-set will be copied from the source directly
         tags = sourceKeyDetails.getTags();
       } else if (tagCopyDirective.equals(CopyDirective.REPLACE.name())) {
-        // Replace the tags with the tags from the request headers
         tags = getTaggingFromHeaders(getHeaders());
       } else {
         OS3Exception ex = newError(INVALID_ARGUMENT, tagCopyDirective);
-        ex.setErrorMessage("An error occurred (InvalidArgument) " +
-            "when calling the CopyObject operation: " +
+        ex.setErrorMessage("An error occurred (InvalidArgument) when calling the CopyObject operation: " +
             "The tagging copy directive specified is invalid. Valid values are COPY or REPLACE.");
         throw ex;
       }
-
-      // Custom metadata in copyObject with metadata directive
       Map<String, String> customMetadata;
       String metadataCopyDirective = getHeaders().getHeaderString(CUSTOM_METADATA_COPY_DIRECTIVE_HEADER);
       if (StringUtils.isEmpty(metadataCopyDirective) || metadataCopyDirective.equals(CopyDirective.COPY.name())) {
-        // The custom metadata will be copied from the source key
         customMetadata = sourceKeyDetails.getMetadata();
       } else if (metadataCopyDirective.equals(CopyDirective.REPLACE.name())) {
-        // Replace the metadata with the metadata form the request headers
         customMetadata = getCustomMetadataFromHeaders(getHeaders().getRequestHeaders());
       } else {
         OS3Exception ex = newError(INVALID_ARGUMENT, metadataCopyDirective);
-        ex.setErrorMessage("An error occurred (InvalidArgument) " +
-            "when calling the CopyObject operation: " +
+        ex.setErrorMessage("An error occurred (InvalidArgument) when calling the CopyObject operation: " +
             "The metadata copy directive specified is invalid. Valid values are COPY or REPLACE.");
         throw ex;
       }
+      if (sourceBucket.equals(destBucket) && sourceKey.equals(destkey)) {
+        if (storageTypeDefault) {
+          OS3Exception ex = newError(S3ErrorTable.INVALID_REQUEST, copyHeader);
+          ex.setErrorMessage("This copy request is illegal because it is trying to copy an object to " +
+              "it self itself without changing the object's metadata, storage class, website redirect " +
+              "location or encryption attributes.");
+          throw ex;
+        } else {
+          ReplicationConfig currentRepl = sourceKeyDetails.getReplicationConfig();
+          if (replicationConfig.equals(currentRepl) && 
+              customMetadata.equals(sourceKeyDetails.getMetadata()) &&
+              tags.equals(sourceKeyDetails.getTags())) {
+            CopyObjectResponse response = new CopyObjectResponse();
+            response.setETag(wrapInQuotes(sourceKeyDetails.getMetadata().get(OzoneConsts.ETAG)));
+            response.setLastModified(sourceKeyDetails.getModificationTime());
+            return response;
+          }
+          long sourceKeyLen = sourceKeyDetails.getDataSize();
+          OzoneBucket bucket = volume.getBucket(destBucket);
+          try (OzoneInputStream src = getClientProtocol().getKey(
+                  volume.getName(), sourceBucket, sourceKey);
+               OzoneOutputStream dest = bucket.rewriteKey(
+                  destkey, sourceKeyLen, sourceKeyDetails.getGeneration(),
+                  replicationConfig, customMetadata)) {
+            long metadataLatencyNs = getMetrics().updateCopyKeyMetadataStats(startNanos);
+            perf.appendMetaLatencyNanos(metadataLatencyNs);
+            sourceDigestInputStream = new DigestInputStream(src, getMessageDigestInstance());
+            long copyLength = IOUtils.copyLarge(sourceDigestInputStream, dest, 0, sourceKeyLen,
+                new byte[getIOBufferSize(sourceKeyLen)]);
+            String eTag = DatatypeConverter.printHexBinary(
+                sourceDigestInputStream.getMessageDigest().digest()).toLowerCase();
+            dest.getMetadata().put(OzoneConsts.ETAG, eTag);
+            getMetrics().incCopyObjectSuccessLength(copyLength);
+            perf.appendSizeBytes(copyLength);
+          } catch (OMException rewriteEx) {
+            if (rewriteEx.getResult() == ResultCodes.KEY_NOT_FOUND) {
+              OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, rewriteEx);
+              ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
+              throw ex;
+            }
+            throw rewriteEx;
+          } catch (IOException ioEx) {
+            if (ioEx.getMessage() != null && 
+                (ioEx.getMessage().contains("Generation mismatch") ||
+                 ioEx.getMessage().contains("does not match the expected generation"))) {
+              OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, ioEx);
+              ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
+              throw ex;
+            }
+            if (ioEx.getCause() instanceof OMException) {
+              OMException omEx = (OMException) ioEx.getCause();
+              if (omEx.getResult() == ResultCodes.KEY_NOT_FOUND) {
+                OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, omEx);
+                ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
+                throw ex;
+              }
+              throw omEx;
+            }
+            throw ioEx;
+          }
+          if (!tags.equals(sourceKeyDetails.getTags())) {
+            try {
+              bucket.putObjectTagging(destkey, tags);
+            } catch (OMException tagEx) {
+              LOG.warn("Failed to update tags for {}: {}", destkey, tagEx.getMessage());
+            }
+          }
+          OzoneKeyDetails updatedKey = getClientProtocol().getKeyDetails(
+              volume.getName(), destBucket, destkey);
+          getMetrics().updateCopyObjectSuccessStats(startNanos);
+          CopyObjectResponse response = new CopyObjectResponse();
+          response.setETag(wrapInQuotes(updatedKey.getMetadata().get(OzoneConsts.ETAG)));
+          response.setLastModified(updatedKey.getModificationTime());
+          return response;
+        }
+      }
+      long sourceKeyLen = sourceKeyDetails.getDataSize();
 
       try (OzoneInputStream src = getClientProtocol().getKey(volume.getName(),
           sourceBucket, sourceKey)) {
@@ -1308,8 +1348,6 @@ public class ObjectEndpoint extends EndpointBase {
       }
       throw ex;
     } finally {
-      // Reset the thread-local message digest instance in case of exception
-      // and MessageDigest#digest is never called
       if (sourceDigestInputStream != null) {
         sourceDigestInputStream.getMessageDigest().reset();
       }
