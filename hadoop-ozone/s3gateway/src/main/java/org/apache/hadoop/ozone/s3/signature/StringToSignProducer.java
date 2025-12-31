@@ -415,12 +415,11 @@ public final class StringToSignProducer {
     }
 
     if (!context.hasEntity()) {
-      // For requests without body, x-amz-content-sha256 must be
-      // UNSIGNED-PAYLOAD or EMPTY_PAYLOAD_SHA256
-      if (!UNSIGNED_PAYLOAD.equals(contentSha256) &&
-          !EMPTY_PAYLOAD_SHA256.equalsIgnoreCase(contentSha256)) {
-        LOG.error("Request has no body but x-amz-content-sha256 is not "
-            + "UNSIGNED-PAYLOAD or empty payload hash: {}", contentSha256);
+      // For requests without body, the hash must be the empty payload hash.
+      // If a different hash is provided, it's invalid.
+      if (!EMPTY_PAYLOAD_SHA256.equalsIgnoreCase(contentSha256)) {
+        LOG.error("Payload SHA256 mismatch for empty body. Expected: {}, Got: {}",
+            EMPTY_PAYLOAD_SHA256, contentSha256);
         throw S3_AUTHINFO_CREATION_ERROR;
       }
       return;
