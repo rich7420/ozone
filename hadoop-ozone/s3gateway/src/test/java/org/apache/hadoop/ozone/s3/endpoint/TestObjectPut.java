@@ -17,7 +17,7 @@
 
 package org.apache.hadoop.ozone.s3.endpoint;
 
-import static org.apache.hadoop.ozone.client.OzoneClientTestUtils.assertKeyContent;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.assertErrorResponse;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.assertSucceeds;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.put;
@@ -40,6 +40,7 @@ import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_VALUE_LENGTH_LIMIT;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_CONTENT_SHA256;
 import static org.apache.hadoop.ozone.s3.util.S3Utils.urlEncode;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -577,5 +578,28 @@ class TestObjectPut {
   /** Put object at {@link #BUCKET_NAME}/{@link #KEY_NAME} with the specified content. */
   private Response putObject(String content) throws IOException, OS3Exception {
     return put(objectEndpoint, BUCKET_NAME, KEY_NAME, content);
+  }
+
+  /** Verify contents of a key.
+   * @return key details for convenience (further checks) */
+  private static OzoneKeyDetails assertKeyContent(
+      OzoneBucket bucket,
+      String keyName,
+      String expected
+  ) throws IOException {
+    return assertKeyContent(bucket, keyName, expected.getBytes(UTF_8));
+  }
+
+  /** Verify contents of a key.
+   * @return key details for convenience (further checks) */
+  private static OzoneKeyDetails assertKeyContent(
+      OzoneBucket bucket,
+      String keyName,
+      byte[] expected
+  ) throws IOException {
+    try (InputStream is = bucket.readKey(keyName)) {
+      assertArrayEquals(expected, IOUtils.readFully(is, expected.length));
+    }
+    return bucket.getKey(keyName);
   }
 }

@@ -72,6 +72,8 @@ public final class OzoneBucketStub extends OzoneBucket {
 
   private Map<String, byte[]> keyContents = new HashMap<>();
 
+  private long nextGeneration = 1L;
+
   private Map<String, MultipartInfoStub> keyToMultipartUpload = new HashMap<>();
 
   private Map<String, Map<Integer, Part>> partList = new HashMap<>();
@@ -138,6 +140,7 @@ public final class OzoneBucketStub extends OzoneBucket {
           @Override
           public void close() throws IOException {
             keyContents.put(key, toByteArray());
+            long generation = nextGeneration++;
             keyDetails.put(key, new OzoneKeyDetails(
                 getVolumeName(),
                 getName(),
@@ -148,7 +151,7 @@ public final class OzoneBucketStub extends OzoneBucket {
                 new ArrayList<>(), finalReplicationCon, metadata, null,
                 () -> readKey(key), true,
                 UserGroupInformation.getCurrentUser().getShortUserName(),
-                tags
+                tags, generation
             ));
             super.close();
           }
@@ -160,18 +163,25 @@ public final class OzoneBucketStub extends OzoneBucket {
   @Override
   public OzoneOutputStream rewriteKey(String keyName, long size, long existingKeyGeneration,
       ReplicationConfig rConfig, Map<String, String> metadata) throws IOException {
-    final ReplicationConfig repConfig;
-    if (rConfig == null) {
-      repConfig = getReplicationConfig();
-    } else {
-      repConfig = rConfig;
+    OzoneKeyDetails existingKey = keyDetails.get(keyName);
+    if (existingKey == null) {
+      throw new OMException(ResultCodes.KEY_NOT_FOUND);
     }
-    ReplicationConfig finalReplicationCon = repConfig;
+    Long currentGeneration = existingKey.getGeneration();
+    if (currentGeneration == null || currentGeneration != existingKeyGeneration) {
+      throw new OMException(ResultCodes.KEY_NOT_FOUND);
+    }
+    final ReplicationConfig repConfig = rConfig != null ? rConfig : getReplicationConfig();
+    final long newGeneration = existingKeyGeneration + 1;
     ByteArrayOutputStream byteArrayOutputStream =
         new KeyMetadataAwareOutputStream(metadata) {
           @Override
           public void close() throws IOException {
             keyContents.put(keyName, toByteArray());
+            Map<String, String> tags = existingKey.getTags();
+            if (tags == null) {
+              tags = new HashMap<>();
+            }
             keyDetails.put(keyName, new OzoneKeyDetails(
                 getVolumeName(),
                 getName(),
@@ -179,8 +189,8 @@ public final class OzoneBucketStub extends OzoneBucket {
                 size,
                 System.currentTimeMillis(),
                 System.currentTimeMillis(),
-                new ArrayList<>(), finalReplicationCon, metadata, null,
-                () -> readKey(keyName), true, null, null
+                new ArrayList<>(), repConfig, metadata, null,
+                () -> readKey(keyName), true, null, tags, newGeneration
             ));
             super.close();
           }
@@ -212,6 +222,7 @@ public final class OzoneBucketStub extends OzoneBucket {
             Map<String, String> objectMetadata = keyMetadata == null ?
                 new HashMap<>() : keyMetadata;
 
+            long generation = nextGeneration++;
             keyDetails.put(key, new OzoneKeyDetails(
                 getVolumeName(),
                 getName(),
@@ -222,7 +233,7 @@ public final class OzoneBucketStub extends OzoneBucket {
                 new ArrayList<>(), rConfig, objectMetadata, null,
                 null, false,
                 UserGroupInformation.getCurrentUser().getShortUserName(),
-                tags
+                tags, generation
             ));
           }
 
@@ -487,6 +498,7 @@ public final class OzoneBucketStub extends OzoneBucket {
         keyContents.put(key, output.toByteArray());
       }
 
+      long generation = nextGeneration++;
       keyDetails.put(key, new OzoneKeyDetails(
           getVolumeName(),
           getName(),
@@ -498,7 +510,7 @@ public final class OzoneBucketStub extends OzoneBucket {
           keyToMultipartUpload.get(key).getMetadata(), null,
           () -> readKey(key), true,
           UserGroupInformation.getCurrentUser().getShortUserName(),
-          keyToMultipartUpload.get(key).getTags()
+          keyToMultipartUpload.get(key).getTags(), generation
       ));
     }
 
@@ -669,6 +681,7 @@ public final class OzoneBucketStub extends OzoneBucket {
     assertDoesNotExist(StringUtils.stripEnd(keyName, "/"));
 
     LOG.info("createDirectory({})", keyName);
+    long generation = nextGeneration++;
     keyDetails.put(keyName, new OzoneKeyDetails(
         getVolumeName(),
         getName(),
@@ -679,7 +692,7 @@ public final class OzoneBucketStub extends OzoneBucket {
         new ArrayList<>(), replicationConfig, new HashMap<>(), null,
         () -> readKey(keyName), false,
         UserGroupInformation.getCurrentUser().getShortUserName(),
-        Collections.emptyMap()));
+        Collections.emptyMap(), generation));
   }
 
   private void assertDoesNotExist(String keyName) throws OMException {

@@ -1251,72 +1251,8 @@ public class ObjectEndpoint extends EndpointBase {
               "location or encryption attributes.");
           throw ex;
         } else {
-          ReplicationConfig currentRepl = sourceKeyDetails.getReplicationConfig();
-          if (replicationConfig.equals(currentRepl) && 
-              customMetadata.equals(sourceKeyDetails.getMetadata()) &&
-              tags.equals(sourceKeyDetails.getTags())) {
-            CopyObjectResponse response = new CopyObjectResponse();
-            response.setETag(wrapInQuotes(sourceKeyDetails.getMetadata().get(OzoneConsts.ETAG)));
-            response.setLastModified(sourceKeyDetails.getModificationTime());
-            return response;
-          }
-          long sourceKeyLen = sourceKeyDetails.getDataSize();
-          OzoneBucket bucket = volume.getBucket(destBucket);
-          try (OzoneInputStream src = getClientProtocol().getKey(
-                  volume.getName(), sourceBucket, sourceKey);
-               OzoneOutputStream dest = bucket.rewriteKey(
-                  destkey, sourceKeyLen, sourceKeyDetails.getGeneration(),
-                  replicationConfig, customMetadata)) {
-            long metadataLatencyNs = getMetrics().updateCopyKeyMetadataStats(startNanos);
-            perf.appendMetaLatencyNanos(metadataLatencyNs);
-            sourceDigestInputStream = new DigestInputStream(src, getMessageDigestInstance());
-            long copyLength = IOUtils.copyLarge(sourceDigestInputStream, dest, 0, sourceKeyLen,
-                new byte[getIOBufferSize(sourceKeyLen)]);
-            String eTag = DatatypeConverter.printHexBinary(
-                sourceDigestInputStream.getMessageDigest().digest()).toLowerCase();
-            dest.getMetadata().put(OzoneConsts.ETAG, eTag);
-            getMetrics().incCopyObjectSuccessLength(copyLength);
-            perf.appendSizeBytes(copyLength);
-          } catch (OMException rewriteEx) {
-            if (rewriteEx.getResult() == ResultCodes.KEY_NOT_FOUND) {
-              OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, rewriteEx);
-              ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
-              throw ex;
-            }
-            throw rewriteEx;
-          } catch (IOException ioEx) {
-            if (ioEx.getMessage() != null && 
-                (ioEx.getMessage().contains("Generation mismatch") ||
-                 ioEx.getMessage().contains("does not match the expected generation"))) {
-              OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, ioEx);
-              ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
-              throw ex;
-            }
-            if (ioEx.getCause() instanceof OMException) {
-              OMException omEx = (OMException) ioEx.getCause();
-              if (omEx.getResult() == ResultCodes.KEY_NOT_FOUND) {
-                OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, omEx);
-                ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
-                throw ex;
-              }
-              throw omEx;
-            }
-            throw ioEx;
-          }
-          if (!tags.equals(sourceKeyDetails.getTags())) {
-            try {
-              bucket.putObjectTagging(destkey, tags);
-            } catch (OMException tagEx) {
-              LOG.warn("Failed to update tags for {}: {}", destkey, tagEx.getMessage());
-            }
-          }
-          OzoneKeyDetails updatedKey = getClientProtocol().getKeyDetails(
-              volume.getName(), destBucket, destkey);
-          getMetrics().updateCopyObjectSuccessStats(startNanos);
-          CopyObjectResponse response = new CopyObjectResponse();
-          response.setETag(wrapInQuotes(updatedKey.getMetadata().get(OzoneConsts.ETAG)));
-          response.setLastModified(updatedKey.getModificationTime());
-          return response;
+          return copyObjectWithStorageTypeChange(volume, sourceBucket, sourceKey, destBucket,
+              destkey, sourceKeyDetails, replicationConfig, customMetadata, tags, startNanos, perf);
         }
       }
       long sourceKeyLen = sourceKeyDetails.getDataSize();
@@ -1352,6 +1288,90 @@ public class ObjectEndpoint extends EndpointBase {
         sourceDigestInputStream.getMessageDigest().reset();
       }
     }
+  }
+
+  private CopyObjectResponse copyObjectWithStorageTypeChange(OzoneVolume volume,
+      String sourceBucket, String sourceKey, String destBucket, String destkey,
+      OzoneKeyDetails sourceKeyDetails, ReplicationConfig replicationConfig,
+      Map<String, String> customMetadata, Map<String, String> tags,
+      long startNanos, PerformanceStringBuilder perf) throws OS3Exception, IOException {
+    ReplicationConfig currentRepl = sourceKeyDetails.getReplicationConfig();
+    if (replicationConfig.equals(currentRepl) && 
+        customMetadata.equals(sourceKeyDetails.getMetadata()) &&
+        tags.equals(sourceKeyDetails.getTags())) {
+      CopyObjectResponse response = new CopyObjectResponse();
+      response.setETag(wrapInQuotes(sourceKeyDetails.getMetadata().get(OzoneConsts.ETAG)));
+      response.setLastModified(sourceKeyDetails.getModificationTime());
+      return response;
+    }
+    long sourceKeyLen = sourceKeyDetails.getDataSize();
+    Long generation = sourceKeyDetails.getGeneration();
+    if (generation == null) {
+      OS3Exception ex = newError(S3ErrorTable.INTERNAL_ERROR, destkey);
+      ex.setErrorMessage("Key generation is not available. Cannot perform atomic rewrite.");
+      throw ex;
+    }
+    OzoneBucket bucket = volume.getBucket(destBucket);
+    DigestInputStream localDigestStream = null;
+    try (OzoneInputStream src = getClientProtocol().getKey(
+            volume.getName(), sourceBucket, sourceKey);
+         OzoneOutputStream dest = bucket.rewriteKey(
+            destkey, sourceKeyLen, generation,
+            replicationConfig, customMetadata)) {
+      long metadataLatencyNs = getMetrics().updateCopyKeyMetadataStats(startNanos);
+      perf.appendMetaLatencyNanos(metadataLatencyNs);
+      localDigestStream = new DigestInputStream(src, getMessageDigestInstance());
+      long copyLength = IOUtils.copyLarge(localDigestStream, dest, 0, sourceKeyLen,
+          new byte[getIOBufferSize(sourceKeyLen)]);
+      String eTag = DatatypeConverter.printHexBinary(
+          localDigestStream.getMessageDigest().digest()).toLowerCase();
+      dest.getMetadata().put(OzoneConsts.ETAG, eTag);
+      getMetrics().incCopyObjectSuccessLength(copyLength);
+      perf.appendSizeBytes(copyLength);
+    } catch (OMException rewriteEx) {
+      if (rewriteEx.getResult() == ResultCodes.KEY_NOT_FOUND) {
+        OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, rewriteEx);
+        ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
+        throw ex;
+      }
+      throw rewriteEx;
+    } catch (IOException ioEx) {
+      if (ioEx.getMessage() != null && 
+          (ioEx.getMessage().contains("Generation mismatch") ||
+           ioEx.getMessage().contains("does not match the expected generation"))) {
+        OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, ioEx);
+        ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
+        throw ex;
+      }
+      if (ioEx.getCause() instanceof OMException) {
+        OMException omEx = (OMException) ioEx.getCause();
+        if (omEx.getResult() == ResultCodes.KEY_NOT_FOUND) {
+          OS3Exception ex = newError(S3ErrorTable.PRECOND_FAILED, destkey, omEx);
+          ex.setErrorMessage("The object was modified during the copy operation. Please retry the request.");
+          throw ex;
+        }
+        throw omEx;
+      }
+      throw ioEx;
+    } finally {
+      if (localDigestStream != null) {
+        localDigestStream.getMessageDigest().reset();
+      }
+    }
+    if (!tags.equals(sourceKeyDetails.getTags())) {
+      try {
+        bucket.putObjectTagging(destkey, tags);
+      } catch (OMException tagEx) {
+        LOG.warn("Failed to update tags for {}: {}", destkey, tagEx.getMessage());
+      }
+    }
+    OzoneKeyDetails updatedKey = getClientProtocol().getKeyDetails(
+        volume.getName(), destBucket, destkey);
+    getMetrics().updateCopyObjectSuccessStats(startNanos);
+    CopyObjectResponse response = new CopyObjectResponse();
+    response.setETag(wrapInQuotes(updatedKey.getMetadata().get(OzoneConsts.ETAG)));
+    response.setLastModified(updatedKey.getModificationTime());
+    return response;
   }
 
   /**
