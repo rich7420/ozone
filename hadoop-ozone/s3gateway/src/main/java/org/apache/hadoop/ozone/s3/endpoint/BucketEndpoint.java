@@ -98,30 +98,29 @@ public class BucketEndpoint extends EndpointBase {
       @PathParam(BUCKET) String bucketName
   ) throws OS3Exception, IOException {
     S3RequestContext context = new S3RequestContext(this, S3GAction.GET_BUCKET);
-
     long startNanos = context.getStartNanos();
     S3GAction s3GAction = context.getAction();
     PerformanceStringBuilder perf = context.getPerf();
 
-    // Chain of responsibility: let each handler try to handle the request
-    for (BucketOperationHandler handler : handlers) {
-      Response response = handler.handleGetRequest(context, bucketName);
-      if (response != null) {
-        return response;  // Handler handled the request
-      }
-    }
-
-    final String continueToken = queryParams().get(QueryParams.CONTINUATION_TOKEN);
-    final String delimiter = queryParams().get(QueryParams.DELIMITER);
-    final String encodingType = queryParams().get(QueryParams.ENCODING_TYPE);
-    final String marker = queryParams().get(QueryParams.MARKER);
-    int maxKeys = queryParams().getInt(QueryParams.MAX_KEYS, 1000);
-    final int maxUploads = queryParams().getInt(QueryParams.MAX_UPLOADS, 1000);
-    String prefix = queryParams().get(QueryParams.PREFIX);
-    String startAfter = queryParams().get(QueryParams.START_AFTER);
-
-    // Actual bucket processing starts here
     try {
+      // Chain of responsibility: let each handler try to handle the request
+      for (BucketOperationHandler handler : handlers) {
+        Response response = handler.handleGetRequest(context, bucketName);
+        if (response != null) {
+          return response;  // Handler handled the request
+        }
+      }
+
+      final String continueToken = queryParams().get(QueryParams.CONTINUATION_TOKEN);
+      final String delimiter = queryParams().get(QueryParams.DELIMITER);
+      final String encodingType = queryParams().get(QueryParams.ENCODING_TYPE);
+      final String marker = queryParams().get(QueryParams.MARKER);
+      int maxKeys = queryParams().getInt(QueryParams.MAX_KEYS, 1000);
+      final int maxUploads = queryParams().getInt(QueryParams.MAX_UPLOADS, 1000);
+      String prefix = queryParams().get(QueryParams.PREFIX);
+      String startAfter = queryParams().get(QueryParams.START_AFTER);
+
+      // Actual bucket processing starts here
       final String uploads = queryParams().get(QueryParams.UPLOADS);
       if (uploads != null) {
         s3GAction = S3GAction.LIST_MULTIPART_UPLOAD;
@@ -146,17 +145,15 @@ public class BucketEndpoint extends EndpointBase {
 
       // Build final response
       return buildFinalResponse(response, s3GAction, startNanos, perf);
-
     } catch (OMException ex) {
       auditReadFailure(s3GAction, ex);
       getMetrics().updateGetBucketFailureStats(startNanos);
       if (isAccessDenied(ex)) {
         throw newError(S3ErrorTable.ACCESS_DENIED, bucketName, ex);
       } else if (ex.getResult() == ResultCodes.FILE_NOT_FOUND) {
-        // File not found, continue and send normal response with 0 keyCount
-        LOG.debug("Key Not found prefix: {}", prefix);
+        LOG.debug("Key Not found prefix: {}", queryParams().get(QueryParams.PREFIX));
       } else {
-        throw ex;
+        throw newError(bucketName, ex);
       }
     } catch (Exception ex) {
       getMetrics().updateGetBucketFailureStats(startNanos);
@@ -169,13 +166,13 @@ public class BucketEndpoint extends EndpointBase {
     ListObjectResponse emptyResponse = new ListObjectResponse();
     emptyResponse.setName(bucketName);
     emptyResponse.setKeyCount(0);
-    
+
     // Log audit entry for empty response to align with previous behavior
     long opLatencyNs = getMetrics().updateGetBucketSuccessStats(startNanos);
     perf.appendCount(0);
     perf.appendOpLatencyNanos(opLatencyNs);
     auditReadSuccess(s3GAction, perf);
-    
+
     return Response.ok(emptyResponse).build();
   }
 
@@ -319,7 +316,7 @@ public class BucketEndpoint extends EndpointBase {
     // delimited by OZONE_URI_DELIMITER
     boolean shallow = listKeysShallowEnabled && OZONE_URI_DELIMITER.equals(delimiter);
 
-    OzoneBucket bucket = getBucket(bucketName);
+    OzoneBucket bucket = getVolume().getBucket(bucketName);
     S3Owner.verifyBucketOwnerCondition(getHeaders(), bucketName, bucket.getOwner());
 
     Iterator<? extends OzoneKey> ozoneKeyIterator = bucket.listKeys(prefix, prevKey, shallow);
@@ -458,13 +455,16 @@ public class BucketEndpoint extends EndpointBase {
   ) throws IOException, OS3Exception {
 
     S3RequestContext context = new S3RequestContext(this, S3GAction.CREATE_BUCKET);
-
-    // Chain of responsibility: let each handler try to handle the request
-    for (BucketOperationHandler handler : handlers) {
-      Response response = handler.handlePutRequest(context, bucketName, body);
-      if (response != null) {
-        return response;  // Handler handled the request
+    try {
+      // Chain of responsibility: let each handler try to handle the request
+      for (BucketOperationHandler handler : handlers) {
+        Response response = handler.handlePutRequest(context, bucketName, body);
+        if (response != null) {
+          return response;  // Handler handled the request
+        }
       }
+    } catch (OMException ex) {
+      throw newError(bucketName, ex);
     }
 
     throw newError(S3ErrorTable.NOT_IMPLEMENTED, "PUT bucket");
@@ -488,7 +488,7 @@ public class BucketEndpoint extends EndpointBase {
     long startNanos = Time.monotonicNowNanos();
     S3GAction s3GAction = S3GAction.LIST_MULTIPART_UPLOAD;
 
-    OzoneBucket bucket = getBucket(bucketName);
+    OzoneBucket bucket = getVolume().getBucket(bucketName);
 
     try {
       S3Owner.verifyBucketOwnerCondition(getHeaders(), bucketName, bucket.getOwner());
@@ -540,11 +540,14 @@ public class BucketEndpoint extends EndpointBase {
     long startNanos = Time.monotonicNowNanos();
     S3GAction s3GAction = S3GAction.HEAD_BUCKET;
     try {
-      OzoneBucket bucket = getBucket(bucketName);
+      OzoneBucket bucket = getVolume().getBucket(bucketName);
       S3Owner.verifyBucketOwnerCondition(getHeaders(), bucketName, bucket.getOwner());
       auditReadSuccess(s3GAction);
       getMetrics().updateHeadBucketSuccessStats(startNanos);
       return Response.ok().build();
+    } catch (OMException e) {
+      auditReadFailure(s3GAction, e);
+      throw newError(bucketName, e);
     } catch (Exception e) {
       auditReadFailure(s3GAction, e);
       throw e;
@@ -562,11 +565,15 @@ public class BucketEndpoint extends EndpointBase {
       throws IOException, OS3Exception {
     S3RequestContext context = new S3RequestContext(this, S3GAction.DELETE_BUCKET);
 
-    for (BucketOperationHandler handler : handlers) {
-      Response response = handler.handleDeleteRequest(context, bucketName);
-      if (response != null) {
-        return response;
+    try {
+      for (BucketOperationHandler handler : handlers) {
+        Response response = handler.handleDeleteRequest(context, bucketName);
+        if (response != null) {
+          return response;
+        }
       }
+    } catch (OMException ex) {
+      throw newError(bucketName, ex);
     }
 
     throw newError(S3ErrorTable.NOT_IMPLEMENTED, "DELETE bucket");
@@ -587,7 +594,7 @@ public class BucketEndpoint extends EndpointBase {
   ) throws OS3Exception, IOException {
     S3GAction s3GAction = S3GAction.MULTI_DELETE;
 
-    OzoneBucket bucket = getBucket(bucketName);
+    OzoneBucket bucket = getVolume().getBucket(bucketName);
     MultiDeleteResponse result = new MultiDeleteResponse();
     List<String> deleteKeys = new ArrayList<>();
 
