@@ -73,6 +73,7 @@ import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.BUCK
 import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.FILE_NOT_FOUND;
 import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.INTERNAL_ERROR;
 import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.INVALID_KMS_PROVIDER;
+import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.INVALID_PART;
 import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.KEY_NOT_FOUND;
 import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.SCM_GET_PIPELINE_EXCEPTION;
 import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.VOLUME_NOT_FOUND;
@@ -640,12 +641,26 @@ public class KeyManagerImpl implements KeyManager {
                 .filter(it -> it.getPartNumber() == partNumberParam)
                 .collect(Collectors.toList());
 
+        // A requested part number that has no blocks does not exist in this
+        // object (part numbers may be non-contiguous), so it is out of range.
+        if (currentLocations.isEmpty()) {
+          throw new OMException("Cannot read part " + partNumberParam
+              + " of key " + keyName + " because it does not exist",
+              INVALID_PART);
+        }
+
         value.updateLocationInfoList(currentLocations, true, true);
 
         value.setDataSize(currentLocations.stream()
             .mapToLong(BlockLocationInfo::getLength)
             .sum());
+      } else if (partNumberParam > 1) {
+        // Non-multipart key: only part number 1 (the whole object) is valid;
+        // any higher part number is out of range.
+        throw new OMException("Cannot read part " + partNumberParam
+            + " of non-multipart key " + keyName, INVALID_PART);
       }
+      // Non-multipart key with partNumber == 1 returns the whole object.
     }
     return value;
   }

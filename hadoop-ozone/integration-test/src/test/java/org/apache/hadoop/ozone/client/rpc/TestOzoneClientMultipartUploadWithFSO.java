@@ -1016,10 +1016,32 @@ public abstract class TestOzoneClientMultipartUploadWithFSO implements NonHATest
 
     s3Bucket.completeMultipartUpload(keyName, uploadID, partsMap);
 
-    OzoneKeyDetails s3KeyDetailsWithNotExistedParts = ozClient.getProxy()
-            .getS3KeyDetails(s3Bucket.getName(), keyName, 4);
-    List<OzoneKeyLocation> ozoneKeyLocations = s3KeyDetailsWithNotExistedParts.getOzoneKeyLocations();
-    assertEquals(0, ozoneKeyLocations.size());
+    // Reading a part number beyond the object's part count must fail with
+    // InvalidPart, instead of silently returning an empty (0-byte) result.
+    OzoneTestUtils.expectOmException(OMException.ResultCodes.INVALID_PART, () ->
+        ozClient.getProxy().getS3KeyDetails(s3Bucket.getName(), keyName, 4));
+  }
+
+  @Test
+  void testGetPartNumberOnNonMultipartKey() throws Exception {
+    keyName = "non-multipart-file";
+    OzoneVolume s3volume = store.getVolume("s3v");
+    s3volume.createBucket(bucketName);
+    OzoneBucket s3Bucket = s3volume.getBucket(bucketName);
+
+    byte[] data = generateData(1024, (byte) 97);
+    try (OzoneOutputStream out = s3Bucket.createKey(keyName, data.length)) {
+      out.write(data);
+    }
+
+    // partNumber == 1 on a non-multipart key returns the whole object.
+    OzoneKeyDetails part1 =
+        ozClient.getProxy().getS3KeyDetails(bucketName, keyName, 1);
+    assertEquals(data.length, part1.getDataSize());
+
+    // partNumber > 1 on a non-multipart key is out of range.
+    OzoneTestUtils.expectOmException(OMException.ResultCodes.INVALID_PART, () ->
+        ozClient.getProxy().getS3KeyDetails(bucketName, keyName, 2));
   }
 
   private String verifyUploadedPart(String uploadID, String partName,
