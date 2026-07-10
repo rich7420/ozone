@@ -573,7 +573,7 @@ public class ObjectEndpoint extends ObjectOperationHandler {
       // A partNumber is validated against the object's parts and yields the
       // metadata of that part; an out-of-range part throws InvalidPart.
       key = (partNumber != 0) ?
-          getClientProtocol().getS3KeyDetails(bucketName, keyPath, partNumber) :
+          getClientProtocol().headS3Object(bucketName, keyPath, partNumber) :
           getClientProtocol().headS3Object(bucketName, keyPath);
 
       isFile(keyPath, key);

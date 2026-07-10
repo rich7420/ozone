@@ -121,6 +121,13 @@ public class ClientProtocolStub implements ClientProtocol {
   }
 
   @Override
+  public OzoneKey headS3Object(String bucketName, String keyName,
+                               int partNumber) throws IOException {
+    return objectStoreStub.getS3Volume().getBucket(bucketName)
+        .headObject(keyName);
+  }
+
+  @Override
   public OzoneKeyDetails getS3KeyDetails(String bucketName, String keyName)
       throws IOException {
     return objectStoreStub.getS3Volume().getBucket(bucketName).getKey(keyName);
