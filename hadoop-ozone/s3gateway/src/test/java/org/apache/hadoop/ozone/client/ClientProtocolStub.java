@@ -123,8 +123,11 @@ public class ClientProtocolStub implements ClientProtocol {
   @Override
   public OzoneKey headS3Object(String bucketName, String keyName,
                                int partNumber) throws IOException {
-    return objectStoreStub.getS3Volume().getBucket(bucketName)
-        .headObject(keyName);
+    // The stub does not model individual multipart parts. Fail fast rather than
+    // silently returning whole-object metadata, so a test cannot get a false
+    // positive for an invalid part.
+    throw new UnsupportedOperationException(
+        "headS3Object with a part number is not supported by the stub");
   }
 
   @Override

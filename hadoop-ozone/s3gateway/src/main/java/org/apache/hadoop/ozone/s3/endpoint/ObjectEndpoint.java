@@ -372,6 +372,10 @@ public class ObjectEndpoint extends ObjectOperationHandler {
       throws IOException, OS3Exception {
 
     final int partNumber = queryParams().getInt(QueryParams.PART_NUMBER, 0);
+    // A negative part number is not a valid part; reject it as InvalidArgument.
+    if (partNumber < 0) {
+      throw newError(INVALID_ARGUMENT, String.valueOf(partNumber));
+    }
 
     final long startNanos = context.getStartNanos();
     final PerformanceStringBuilder perf = context.getPerf();
@@ -563,6 +567,10 @@ public class ObjectEndpoint extends ObjectOperationHandler {
     long startNanos = Time.monotonicNowNanos();
     S3GAction s3GAction = S3GAction.HEAD_KEY;
     final int partNumber = queryParams().getInt(QueryParams.PART_NUMBER, 0);
+    // A negative part number is not a valid part; reject it as InvalidArgument.
+    if (partNumber < 0) {
+      throw newError(INVALID_ARGUMENT, String.valueOf(partNumber));
+    }
 
     OzoneKey key;
     try {
