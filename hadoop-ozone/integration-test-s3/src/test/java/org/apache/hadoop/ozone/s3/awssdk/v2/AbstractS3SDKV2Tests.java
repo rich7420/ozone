@@ -1405,6 +1405,57 @@ public abstract class AbstractS3SDKV2Tests extends OzoneTestBase implements NonH
   }
 
   @Test
+  public void testUploadPartCopyInvalidRange() {
+    final String sourceBucketName = getBucketName("source");
+    final String destBucketName = getBucketName("dest");
+    final String sourceKey = getKeyName("source");
+    final String destKey = getKeyName("dest");
+    s3Client.createBucket(b -> b.bucket(sourceBucketName));
+    s3Client.createBucket(b -> b.bucket(destBucketName));
+
+    // Source object is exactly 5 bytes.
+    s3Client.putObject(b -> b.bucket(sourceBucketName).key(sourceKey), RequestBody.fromString("hello"));
+
+    CreateMultipartUploadResponse createResponse = s3Client.createMultipartUpload(b -> b
+        .bucket(destBucketName)
+        .key(destKey));
+    String uploadId = createResponse.uploadId();
+
+    // Case 1: range beyond the source object length -> InvalidRange.
+    UploadPartCopyRequest outOfRangeRequest = UploadPartCopyRequest.builder()
+        .sourceBucket(sourceBucketName)
+        .sourceKey(sourceKey)
+        .destinationBucket(destBucketName)
+        .destinationKey(destKey)
+        .uploadId(uploadId)
+        .partNumber(1)
+        .copySourceRange("bytes=0-21")
+        .build();
+    S3Exception outOfRange = assertThrows(S3Exception.class, () -> s3Client.uploadPartCopy(outOfRangeRequest));
+    // InvalidRange maps to HTTP 416; AWS also permits 400 for this case.
+    assertTrue(outOfRange.statusCode() == 400 || outOfRange.statusCode() == 416,
+        "unexpected status: " + outOfRange.statusCode());
+    assertEquals("InvalidRange", outOfRange.awsErrorDetails().errorCode());
+
+    // Case 2: malformed range values -> InvalidArgument (mirrors s3-tests).
+    for (String malformedRange : Arrays.asList(
+        "0-2", "bytes=0", "bytes=hello-world", "bytes=0-bar", "bytes=hello-", "bytes=0-2,3-5")) {
+      UploadPartCopyRequest malformedRequest = UploadPartCopyRequest.builder()
+          .sourceBucket(sourceBucketName)
+          .sourceKey(sourceKey)
+          .destinationBucket(destBucketName)
+          .destinationKey(destKey)
+          .uploadId(uploadId)
+          .partNumber(1)
+          .copySourceRange(malformedRange)
+          .build();
+      S3Exception malformed = assertThrows(S3Exception.class, () -> s3Client.uploadPartCopy(malformedRequest));
+      assertEquals(400, malformed.statusCode());
+      assertEquals("InvalidArgument", malformed.awsErrorDetails().errorCode());
+    }
+  }
+
+  @Test
   public void testLowLevelMultipartUpload(@TempDir Path tempDir) throws Exception {
     final String bucketName = getBucketName();
     final String keyName = getKeyName();
