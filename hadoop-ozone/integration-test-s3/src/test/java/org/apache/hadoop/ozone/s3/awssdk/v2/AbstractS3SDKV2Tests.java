@@ -21,6 +21,8 @@ import static org.apache.hadoop.ozone.OzoneConsts.MB;
 import static org.apache.hadoop.ozone.s3.awssdk.S3SDKTestUtils.calculateDigest;
 import static org.apache.hadoop.ozone.s3.awssdk.S3SDKTestUtils.createFile;
 import static org.apache.hadoop.ozone.s3.util.S3Utils.stripQuotes;
+import static org.apache.http.HttpStatus.SC_BAD_REQUEST;
+import static org.apache.http.HttpStatus.SC_REQUESTED_RANGE_NOT_SATISFIABLE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -1421,36 +1423,28 @@ public abstract class AbstractS3SDKV2Tests extends OzoneTestBase implements NonH
         .key(destKey));
     String uploadId = createResponse.uploadId();
 
-    // Case 1: range beyond the source object length -> InvalidRange.
-    UploadPartCopyRequest outOfRangeRequest = UploadPartCopyRequest.builder()
+    UploadPartCopyRequest.Builder requestBuilder = UploadPartCopyRequest.builder()
         .sourceBucket(sourceBucketName)
         .sourceKey(sourceKey)
         .destinationBucket(destBucketName)
         .destinationKey(destKey)
         .uploadId(uploadId)
-        .partNumber(1)
-        .copySourceRange("bytes=0-21")
-        .build();
-    S3Exception outOfRange = assertThrows(S3Exception.class, () -> s3Client.uploadPartCopy(outOfRangeRequest));
+        .partNumber(1);
+
+    // Case 1: range beyond the source object length -> InvalidRange.
+    S3Exception outOfRange = assertThrows(S3Exception.class, () ->
+        s3Client.uploadPartCopy(requestBuilder.copySourceRange("bytes=0-21").build()));
     // InvalidRange maps to HTTP 416; AWS also permits 400 for this case.
-    assertTrue(outOfRange.statusCode() == 400 || outOfRange.statusCode() == 416,
-        "unexpected status: " + outOfRange.statusCode());
+    assertThat(outOfRange.statusCode())
+        .isIn(SC_BAD_REQUEST, SC_REQUESTED_RANGE_NOT_SATISFIABLE);
     assertEquals("InvalidRange", outOfRange.awsErrorDetails().errorCode());
 
     // Case 2: malformed range values -> InvalidArgument (mirrors s3-tests).
     for (String malformedRange : Arrays.asList(
         "0-2", "bytes=0", "bytes=hello-world", "bytes=0-bar", "bytes=hello-", "bytes=0-2,3-5")) {
-      UploadPartCopyRequest malformedRequest = UploadPartCopyRequest.builder()
-          .sourceBucket(sourceBucketName)
-          .sourceKey(sourceKey)
-          .destinationBucket(destBucketName)
-          .destinationKey(destKey)
-          .uploadId(uploadId)
-          .partNumber(1)
-          .copySourceRange(malformedRange)
-          .build();
-      S3Exception malformed = assertThrows(S3Exception.class, () -> s3Client.uploadPartCopy(malformedRequest));
-      assertEquals(400, malformed.statusCode());
+      S3Exception malformed = assertThrows(S3Exception.class, () ->
+          s3Client.uploadPartCopy(requestBuilder.copySourceRange(malformedRange).build()));
+      assertThat(malformed.statusCode()).isEqualTo(SC_BAD_REQUEST);
       assertEquals("InvalidArgument", malformed.awsErrorDetails().errorCode());
     }
   }

@@ -37,6 +37,7 @@ import static org.apache.hadoop.ozone.s3.util.S3Consts.CopyDirective;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.DECODED_CONTENT_LENGTH_HEADER;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.MP_PARTS_COUNT;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.RANGE_HEADER;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.RANGE_HEADER_MATCH_PATTERN;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.RANGE_HEADER_SUPPORTED_UNIT;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.STORAGE_CLASS_HEADER;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_COUNT_HEADER;
@@ -58,7 +59,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
@@ -123,9 +123,6 @@ public class ObjectEndpoint extends ObjectOperationHandler {
   private static final String PATH = "path";
   // Default Content-Type for objects stored without one, matching S3.
   private static final String DEFAULT_CONTENT_TYPE = "binary/octet-stream";
-  // x-amz-copy-source-range must be a single numeric byte range: bytes=<start>-<end>
-  private static final Pattern COPY_SOURCE_RANGE_PATTERN =
-      Pattern.compile("^bytes=(\\d+)-(\\d+)$");
 
   private static final Logger LOG =
       LoggerFactory.getLogger(ObjectEndpoint.class);
@@ -896,12 +893,14 @@ public class ObjectEndpoint extends ObjectOperationHandler {
             getHeaders().getHeaderString(COPY_SOURCE_HEADER_RANGE);
         RangeHeader rangeHeader = null;
         if (range != null) {
-          Matcher matcher = COPY_SOURCE_RANGE_PATTERN.matcher(range);
-          if (!matcher.matches()) {
+          Matcher matcher = RANGE_HEADER_MATCH_PATTERN.matcher(range);
+          if (!matcher.matches()
+              || matcher.group("start").isEmpty()
+              || matcher.group("end").isEmpty()) {
             throw newError(S3ErrorTable.INVALID_ARGUMENT, range);
           }
-          long startOffset = Long.parseLong(matcher.group(1));
-          long endOffset = Long.parseLong(matcher.group(2));
+          long startOffset = Long.parseLong(matcher.group("start"));
+          long endOffset = Long.parseLong(matcher.group("end"));
           long sourceSize = sourceKeyDetails.getDataSize();
           if (startOffset > endOffset || endOffset >= sourceSize) {
             throw newError(S3ErrorTable.INVALID_RANGE, range);
