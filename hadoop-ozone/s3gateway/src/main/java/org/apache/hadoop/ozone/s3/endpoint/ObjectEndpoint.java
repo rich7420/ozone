@@ -762,13 +762,6 @@ public class ObjectEndpoint extends ObjectOperationHandler {
     S3GAction s3GAction = S3GAction.COMPLETE_MULTIPART_UPLOAD;
     List<CompleteMultipartUploadRequest.Part> partList =
         multipartUploadRequest.getPartList();
-
-    // Reject an empty part list before contacting OM.
-    if (partList == null || partList.isEmpty()) {
-      throw newError(MALFORMED_XML, key);
-    }
-
-    OzoneVolume volume = getVolume();
     // Using LinkedHashMap to preserve ordering of parts list.
     Map<Integer, String> partsMap = new LinkedHashMap<>();
 
@@ -777,6 +770,12 @@ public class ObjectEndpoint extends ObjectOperationHandler {
 
     OmMultipartUploadCompleteInfo omMultipartUploadCompleteInfo;
     try {
+      // Reject an empty part list before contacting OM.
+      if (partList == null || partList.isEmpty()) {
+        throw newError(MALFORMED_XML, key);
+      }
+
+      OzoneVolume volume = getVolume();
       OzoneBucket ozoneBucket = volume.getBucket(bucket);
       S3Owner.verifyBucketOwnerCondition(getHeaders(), bucket, ozoneBucket.getOwner());
 
