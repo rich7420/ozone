@@ -23,17 +23,32 @@ package org.apache.hadoop.ozone.s3.signature;
  */
 public class MalformedResourceException extends Exception {
   private final String resource;
+  private final boolean accessDenied;
 
   public MalformedResourceException(String resource) {
+    this(resource, false);
+  }
+
+  public MalformedResourceException(String resource, boolean accessDenied) {
     this.resource = resource;
+    this.accessDenied = accessDenied;
   }
 
   public MalformedResourceException(String message, String resource) {
     super(message);
     this.resource = resource;
+    this.accessDenied = false;
   }
 
   public String getResource() {
     return resource;
+  }
+
+  /**
+   * @return true if the failure should be reported as 403 AccessDenied instead
+   * of 400 (e.g. an expired or out-of-range pre-signed URL).
+   */
+  public boolean isAccessDenied() {
+    return accessDenied;
   }
 }

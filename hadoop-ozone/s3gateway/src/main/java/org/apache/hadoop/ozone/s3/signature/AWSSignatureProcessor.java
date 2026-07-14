@@ -17,6 +17,7 @@
 
 package org.apache.hadoop.ozone.s3.signature;
 
+import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.ACCESS_DENIED;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.MALFORMED_HEADER;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -82,7 +83,9 @@ public class AWSSignatureProcessor implements SignatureProcessor {
       } catch (MalformedResourceException e) {
         AuditMessage message = buildAuthFailureMessage(e);
         AUDIT.logAuthFailure(message);
-        throw S3ErrorTable.newError(MALFORMED_HEADER, e.getResource());
+        throw S3ErrorTable.newError(
+            e.isAccessDenied() ? ACCESS_DENIED : MALFORMED_HEADER,
+            e.getResource());
       }
       if (signatureInfo != null) {
         break;
