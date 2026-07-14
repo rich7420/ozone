@@ -773,6 +773,28 @@ public abstract class AbstractS3SDKV2Tests extends OzoneTestBase implements NonH
     assertEquals(part1Content, objectBytes.asUtf8String());
   }
 
+  @Test
+  public void testCompleteMultipartUploadWithNoParts() {
+    final String bucketName = getBucketName();
+    final String keyName = getKeyName();
+    s3Client.createBucket(b -> b.bucket(bucketName));
+
+    // Initiate multipart upload
+    CreateMultipartUploadResponse createResponse = s3Client.createMultipartUpload(b -> b
+        .bucket(bucketName)
+        .key(keyName));
+    String uploadId = createResponse.uploadId();
+
+    S3Exception exception = assertThrows(S3Exception.class, () -> s3Client.completeMultipartUpload(b -> b
+        .bucket(bucketName)
+        .key(keyName)
+        .uploadId(uploadId)
+        .multipartUpload(CompletedMultipartUpload.builder().build())));
+
+    assertThat(exception.statusCode()).isEqualTo(SC_BAD_REQUEST);
+    assertThat(exception.awsErrorDetails().errorCode()).isEqualTo("MalformedXML");
+  }
+
   @ParameterizedTest
   @MethodSource("wrongContentMD5Provider")
   public void testMultipartUploadPartWithWrongMD5Header(String wrongMd5Base64, String expectedErrorCode) {
