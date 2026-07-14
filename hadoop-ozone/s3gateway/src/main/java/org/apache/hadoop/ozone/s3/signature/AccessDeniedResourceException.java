@@ -18,22 +18,11 @@
 package org.apache.hadoop.ozone.s3.signature;
 
 /**
- * This exception is used to communicate validation errors when parsing
- * signatures.
+ * Signals a signature validation failure that AWS reports as 403 AccessDenied
+ * rather than 400 (e.g. an expired or out-of-range pre-signed URL).
  */
-public class MalformedResourceException extends Exception {
-  private final String resource;
-
-  public MalformedResourceException(String resource) {
-    this.resource = resource;
-  }
-
-  public MalformedResourceException(String message, String resource) {
-    super(message);
-    this.resource = resource;
-  }
-
-  public String getResource() {
-    return resource;
+public class AccessDeniedResourceException extends MalformedResourceException {
+  public AccessDeniedResourceException(String resource) {
+    super(resource);
   }
 }

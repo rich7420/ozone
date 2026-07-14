@@ -20,7 +20,6 @@ package org.apache.hadoop.ozone.s3.signature;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -81,7 +80,7 @@ public class TestAuthorizationV4QueryParser {
     MalformedResourceException missingDate = assertThrows(
         MalformedResourceException.class,
         () -> new AuthorizationV4QueryParser(parameters).parseSignature());
-    assertFalse(missingDate.isAccessDenied());
+    assertFalse(missingDate instanceof AccessDeniedResourceException);
 
     // Empty date
     parameters.put("X-Amz-Date", "");
@@ -106,23 +105,17 @@ public class TestAuthorizationV4QueryParser {
 
     // Out-of-range expires -> 403 (AccessDenied), not 400.
     parameters.put("X-Amz-Expires", "0");
-    MalformedResourceException tooSmall = assertThrows(
-        MalformedResourceException.class,
+    assertThrows(AccessDeniedResourceException.class,
         () -> new AuthorizationV4QueryParser(parameters).parseSignature());
-    assertTrue(tooSmall.isAccessDenied());
     parameters.put("X-Amz-Expires", "604801");
-    MalformedResourceException tooLarge = assertThrows(
-        MalformedResourceException.class,
+    assertThrows(AccessDeniedResourceException.class,
         () -> new AuthorizationV4QueryParser(parameters).parseSignature());
-    assertTrue(tooLarge.isAccessDenied());
 
     // Expired request -> 403 (AccessDenied), not 400.
     parameters.put("X-Amz-Date", "20160801T083241Z");
     parameters.put("X-Amz-Expires", "10000");
-    MalformedResourceException expired = assertThrows(
-        MalformedResourceException.class,
+    assertThrows(AccessDeniedResourceException.class,
         () -> new AuthorizationV4QueryParser(parameters).parseSignature());
-    assertTrue(expired.isAccessDenied());
 
   }
 

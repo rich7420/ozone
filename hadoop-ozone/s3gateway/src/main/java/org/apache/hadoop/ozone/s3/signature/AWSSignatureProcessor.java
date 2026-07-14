@@ -80,12 +80,12 @@ public class AWSSignatureProcessor implements SignatureProcessor {
     for (SignatureParser parser : signatureParsers) {
       try {
         signatureInfo = parser.parseSignature();
+      } catch (AccessDeniedResourceException e) {
+        AUDIT.logAuthFailure(buildAuthFailureMessage(e));
+        throw S3ErrorTable.newError(ACCESS_DENIED, e.getResource());
       } catch (MalformedResourceException e) {
-        AuditMessage message = buildAuthFailureMessage(e);
-        AUDIT.logAuthFailure(message);
-        throw S3ErrorTable.newError(
-            e.isAccessDenied() ? ACCESS_DENIED : MALFORMED_HEADER,
-            e.getResource());
+        AUDIT.logAuthFailure(buildAuthFailureMessage(e));
+        throw S3ErrorTable.newError(MALFORMED_HEADER, e.getResource());
       }
       if (signatureInfo != null) {
         break;

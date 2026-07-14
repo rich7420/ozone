@@ -137,15 +137,15 @@ public class AuthorizationV4QueryParser implements SignatureParser {
           .plus(expires, SECONDS).isBefore(ZonedDateTime.now())) {
         // An expired pre-signed URL is an authorization failure (403), not a
         // malformed header (400).
-        throw new MalformedResourceException("Pre-signed S3 url is expired. "
+        throw new AccessDeniedResourceException("Pre-signed S3 url is expired. "
             + "dateString:" + dateString
-            + " expiresString:" + expiresString, true);
+            + " expiresString:" + expiresString);
       }
     } else {
       // An out-of-range X-Amz-Expires is rejected by AWS with 403, not 400.
-      throw new MalformedResourceException("Invalid expiry duration. "
+      throw new AccessDeniedResourceException("Invalid expiry duration. "
           + "X-Amz-Expires should be between " + X_AMZ_EXPIRES_MIN
-          + "and" + X_AMZ_EXPIRES_MAX + " expiresString:" + expiresString, true);
+          + "and" + X_AMZ_EXPIRES_MAX + " expiresString:" + expiresString);
     }
   }
 

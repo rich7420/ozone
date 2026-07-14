@@ -17,9 +17,9 @@
 
 package org.apache.hadoop.ozone.s3.signature;
 
+import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.assertErrorResponse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -27,8 +27,7 @@ import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.core.MultivaluedHashMap;
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.UriInfo;
-import org.apache.hadoop.ozone.s3.exception.OS3Exception;
-import org.apache.http.HttpStatus;
+import org.apache.hadoop.ozone.s3.exception.S3ErrorTable;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -73,8 +72,6 @@ public class TestAWSSignatureProcessor {
     AWSSignatureProcessor processor = new AWSSignatureProcessor();
     processor.setContext(context);
 
-    OS3Exception ex = assertThrows(OS3Exception.class, processor::parseSignature);
-    assertEquals(HttpStatus.SC_FORBIDDEN, ex.getHttpCode());
-    assertEquals("AccessDenied", ex.getCode());
+    assertErrorResponse(S3ErrorTable.ACCESS_DENIED, processor::parseSignature);
   }
 }
