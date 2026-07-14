@@ -1749,6 +1749,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     return omRpcAddress;
   }
 
+  /** @return the short name of the user that started this OM (its login user). */
+  public String getOmStarterUser() {
+    return omStarterUser;
+  }
+
   @VisibleForTesting
   public LifeCycle.State getOmRatisServerState() {
     if (omRatisServer == null) {

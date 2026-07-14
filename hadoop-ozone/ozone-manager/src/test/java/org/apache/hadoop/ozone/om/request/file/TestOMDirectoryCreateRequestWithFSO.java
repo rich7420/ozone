@@ -35,7 +35,9 @@ import static org.mockito.Mockito.when;
 
 import jakarta.annotation.Nonnull;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -858,6 +860,50 @@ public class TestOMDirectoryCreateRequestWithFSO {
         .setCreateDirectoryRequest(CreateDirectoryRequest.newBuilder().setKeyArgs(builder))
         .setCmdType(OzoneManagerProtocolProtos.Type.CreateDirectory)
         .setClientId(UUID.randomUUID().toString()).build();
+  }
+
+  /**
+   * HDDS-15467: an OM-internal write with no UserInfo, run inside a
+   * {@code ugi.doAs()}, must resolve to the real caller through preExecute so
+   * the apply-path ACL check (getAclsForDir -&gt; createUGIForApi in
+   * validateAndUpdateCache) succeeds instead of failing closed with
+   * UNAUTHORIZED. The OM starter user is deliberately not adopted as a fallback.
+   */
+  @Test
+  public void testInternalDoAsWriteResolvesCallerIdentity() throws Exception {
+    String volumeName = "vol1";
+    String bucketName = "bucket1";
+    OMRequestTestUtils.addVolumeAndBucketToDB(volumeName, bucketName,
+        omMetadataManager, getBucketLayout());
+    final long volumeId = omMetadataManager.getVolumeId(volumeName);
+    final long bucketId = omMetadataManager.getBucketId(volumeName, bucketName);
+
+    // getUserIfNotExists() falls back to getCurrentUser() (the doAs caller) but
+    // never to the OM starter user.
+    when(ozoneManager.getOmStarterUser()).thenReturn("om-starter-user");
+    when(ozoneManager.getOmRpcServerAddr())
+        .thenReturn(new InetSocketAddress("localhost", 9862));
+
+    List<String> dirs = new ArrayList<>();
+    String keyName = createDirKey(dirs, 3);
+    // The internal request carries no UserInfo.
+    OMRequest omRequest = createDirectoryRequest(volumeName, bucketName, keyName);
+
+    UserGroupInformation caller =
+        UserGroupInformation.createRemoteUser("ttl-user");
+    OMClientResponse response = caller.doAs(
+        (PrivilegedExceptionAction<OMClientResponse>) () -> {
+          OMRequest preExecuted = new OMDirectoryCreateRequestWithFSO(
+              omRequest, BucketLayout.FILE_SYSTEM_OPTIMIZED)
+              .preExecute(ozoneManager);
+          return new OMDirectoryCreateRequestWithFSO(preExecuted,
+              BucketLayout.FILE_SYSTEM_OPTIMIZED)
+              .validateAndUpdateCache(ozoneManager, 100L);
+        });
+
+    assertSame(OzoneManagerProtocolProtos.Status.OK,
+        response.getOMResponse().getStatus());
+    verifyDirectoriesInDB(dirs, volumeId, bucketId);
   }
 
   private BucketLayout getBucketLayout() {

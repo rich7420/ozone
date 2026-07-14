@@ -199,17 +199,21 @@ public abstract class OMClientRequest implements RequestAuditor {
   }
 
   /**
-   * For non-rpc internal calls Server.getRemoteUser()
-   * and Server.getRemoteIp() will be null.
-   * Passing getCurrentUser() and Ip of the Om node that started it.
+   * For non-rpc internal calls Server.getRemoteUser() and Server.getRemoteIp()
+   * are null, so the identity is taken from {@link UserGroupInformation
+   * #getCurrentUser()} and the address of the OM node. Inside an internal
+   * {@code ugi.doAs()} block this resolves to the real caller.
+   * <p>
+   * The OM starter (login) user is deliberately not used as a fallback: a
+   * request that reaches here without any user context would otherwise run with
+   * OM admin privilege (HDDS-15467). Such a request is left without an identity
+   * so it fails closed downstream in {@link #createUGI()}.
    * @return User Info.
    */
   public OzoneManagerProtocolProtos.UserInfo getUserIfNotExists(
       OzoneManager ozoneManager) throws IOException {
     OzoneManagerProtocolProtos.UserInfo userInfo = getUserInfo();
     if (!userInfo.hasRemoteAddress() || !userInfo.hasUserName()) {
-      OzoneManagerProtocolProtos.UserInfo.Builder newuserInfo =
-          OzoneManagerProtocolProtos.UserInfo.newBuilder();
       UserGroupInformation user;
       InetAddress remoteAddress;
       try {
@@ -218,14 +222,25 @@ public abstract class OMClientRequest implements RequestAuditor {
             .getAddress();
       } catch (Exception e) {
         LOG.debug("Couldn't get om Rpc server address", e);
-        return getUserInfo();
+        return userInfo;
       }
-      newuserInfo.setUserName(user.getUserName());
-      newuserInfo.setHostName(remoteAddress.getHostName());
-      newuserInfo.setRemoteAddress(remoteAddress.getHostAddress());
-      return newuserInfo.build();
+      OzoneManagerProtocolProtos.UserInfo.Builder newUserInfo =
+          userInfo.toBuilder();
+      // Adopt the current user as the identity only when it is a real caller
+      // (e.g. an internal doAs()), never the OM starter user, so a request that
+      // arrived without any user context fails closed downstream instead of
+      // running with OM admin privilege (HDDS-15467).
+      if (!userInfo.hasUserName()
+          && !user.getShortUserName().equals(ozoneManager.getOmStarterUser())) {
+        newUserInfo.setUserName(user.getUserName());
+      }
+      if (!userInfo.hasRemoteAddress()) {
+        newUserInfo.setHostName(remoteAddress.getHostName());
+        newUserInfo.setRemoteAddress(remoteAddress.getHostAddress());
+      }
+      return newUserInfo.build();
     }
-    return getUserInfo();
+    return userInfo;
   }
 
   /**
