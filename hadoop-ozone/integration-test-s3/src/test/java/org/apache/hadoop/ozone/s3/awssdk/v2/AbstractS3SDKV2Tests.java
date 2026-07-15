@@ -1453,13 +1453,15 @@ public abstract class AbstractS3SDKV2Tests extends OzoneTestBase implements NonH
         .uploadId(uploadId)
         .partNumber(1);
 
-    // Case 1: range beyond the source object length -> InvalidRange.
-    S3Exception outOfRange = assertThrows(S3Exception.class, () ->
-        s3Client.uploadPartCopy(requestBuilder.copySourceRange("bytes=0-21").build()));
-    // InvalidRange maps to HTTP 416; AWS also permits 400 for this case.
-    assertThat(outOfRange.statusCode())
-        .isIn(SC_BAD_REQUEST, SC_REQUESTED_RANGE_NOT_SATISFIABLE);
-    assertEquals("InvalidRange", outOfRange.awsErrorDetails().errorCode());
+    // Case 1: range beyond the source object length, and start > end -> InvalidRange.
+    // InvalidRange maps to HTTP 416; AWS also permits 400 for these cases.
+    for (String invalidRange : Arrays.asList("bytes=0-21", "bytes=3-1")) {
+      S3Exception outOfRange = assertThrows(S3Exception.class, () ->
+          s3Client.uploadPartCopy(requestBuilder.copySourceRange(invalidRange).build()));
+      assertThat(outOfRange.statusCode())
+          .isIn(SC_BAD_REQUEST, SC_REQUESTED_RANGE_NOT_SATISFIABLE);
+      assertEquals("InvalidRange", outOfRange.awsErrorDetails().errorCode());
+    }
 
     // Case 2: malformed range values -> InvalidArgument (mirrors s3-tests).
     for (String malformedRange : Arrays.asList(
