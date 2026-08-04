@@ -1130,20 +1130,17 @@ public class TestSnapshotDiffManager {
 
     spy.loadJobsOnStartUp();
 
-    // Wait for sometime to make sure that job finishes.
-    attempt(() ->
-        verify(spy, atLeast(1))
-            .generateSnapshotDiffReport(anyString(), anyString(),
-                eq(VOLUME_NAME), eq(BUCKET_NAME), eq(snapshotInfo.getName()),
-                eq(snapshotInfoList.get(1).getName()), eq(false),
-                eq(false)),
-        10, TimeDuration.ONE_SECOND, null, null);
-
-    SnapshotDiffJob snapDiffJob = getSnapshotDiffJobFromDb(snapshotInfo,
-        snapshotInfoList.get(1));
-
-    assertEquals(DONE, snapDiffJob.getStatus());
-    assertEquals(1L, snapDiffJob.getTotalDiffEntries());
+    // loadJobsOnStartUp resumes the job asynchronously on a thread pool. Poll the
+    // persisted job until its status flips to DONE instead of verifying that
+    // generateSnapshotDiffReport was called: Mockito records the invocation
+    // before the stubbed answer writes DONE to the DB, so verifying the call can
+    // win the race against that write and observe a stale IN_PROGRESS status.
+    attempt(() -> {
+      SnapshotDiffJob snapDiffJob = getSnapshotDiffJobFromDb(snapshotInfo,
+          snapshotInfoList.get(1));
+      assertEquals(DONE, snapDiffJob.getStatus());
+      assertEquals(1L, snapDiffJob.getTotalDiffEntries());
+    }, 10, TimeDuration.ONE_SECOND, null, null);
   }
 
   private SnapshotDiffJob getSnapshotDiffJobFromDb(SnapshotInfo fromSnapshot,
