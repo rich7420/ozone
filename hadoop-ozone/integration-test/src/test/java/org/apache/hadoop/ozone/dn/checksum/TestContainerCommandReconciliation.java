@@ -56,11 +56,20 @@ import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_HTTP_KERBEROS_PRI
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_KERBEROS_KEYTAB_FILE_KEY;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_KERBEROS_PRINCIPAL_KEY;
 import static org.apache.hadoop.security.UserGroupInformation.AuthenticationMethod.KERBEROS;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.spy;
 
 import java.io.File;
 import java.io.IOException;
@@ -68,6 +77,7 @@ import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
@@ -80,6 +90,7 @@ import org.apache.hadoop.hdds.conf.StorageUnit;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction;
 import org.apache.hadoop.hdds.scm.ScmConfig;
 import org.apache.hadoop.hdds.scm.container.ContainerID;
 import org.apache.hadoop.hdds.scm.container.ContainerReplica;
@@ -90,6 +101,8 @@ import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
 import org.apache.hadoop.hdds.security.symmetric.SecretKeyClient;
 import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
 import org.apache.hadoop.hdds.utils.db.BatchOperation;
+import org.apache.hadoop.hdds.utils.db.BatchOperationHandler;
+import org.apache.hadoop.hdds.utils.db.RocksDatabaseException;
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.apache.hadoop.ozone.ClientVersion;
 import org.apache.hadoop.ozone.HddsDatanodeService;
@@ -105,16 +118,20 @@ import org.apache.hadoop.ozone.container.OzoneTestHelper;
 import org.apache.hadoop.ozone.container.checksum.ContainerChecksumTreeManager;
 import org.apache.hadoop.ozone.container.checksum.ContainerMerkleTreeWriter;
 import org.apache.hadoop.ozone.container.checksum.DNContainerOperationClient;
+import org.apache.hadoop.ozone.container.checksum.ReconcileContainerTask;
 import org.apache.hadoop.ozone.container.common.helpers.BlockData;
 import org.apache.hadoop.ozone.container.common.interfaces.Container;
 import org.apache.hadoop.ozone.container.common.interfaces.DBHandle;
 import org.apache.hadoop.ozone.container.common.statemachine.DatanodeStateMachine;
+import org.apache.hadoop.ozone.container.common.statemachine.commandhandler.DeleteBlocksCommandHandler;
 import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainer;
 import org.apache.hadoop.ozone.container.keyvalue.KeyValueContainerData;
 import org.apache.hadoop.ozone.container.keyvalue.KeyValueHandler;
 import org.apache.hadoop.ozone.container.keyvalue.TestContainerCorruptions;
 import org.apache.hadoop.ozone.container.keyvalue.helpers.BlockUtils;
 import org.apache.hadoop.ozone.container.keyvalue.interfaces.BlockManager;
+import org.apache.hadoop.ozone.container.metadata.DatanodeStore;
+import org.apache.hadoop.ozone.container.replication.ReplicationSupervisor;
 import org.apache.hadoop.ozone.om.OzoneManager;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.ozone.test.GenericTestUtils;
@@ -124,6 +141,9 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -482,6 +502,115 @@ public class TestContainerCommandReconciliation {
         newContainerChecksumInfo.getContainerMerkleTree());
     assertEquals(oldDataChecksum, newContainerChecksumInfo.getContainerMerkleTree().getDataChecksum());
     OzoneTestHelper.validateData(KEY_NAME, data, store, volume, bucket);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  public void testReconcileMissedBlockDeletion(boolean restartAfterFailure) throws Exception {
+    long containerID = getDataAndContainer(true, 20 * 1024 * 1024,
+        UUID.randomUUID().toString(), UUID.randomUUID().toString()).getLeft();
+    HddsDatanodeService targetDN = cluster.getHddsDatanodes().get(0);
+    KeyValueContainer target = getContainer(targetDN, containerID);
+    KeyValueHandler handler = (KeyValueHandler) targetDN.getDatanodeStateMachine().getContainer().getDispatcher()
+        .getHandler(ContainerProtos.ContainerType.KeyValueContainer);
+    List<BlockData> blocks = handler.getBlockManager().listBlock(target, -1, 100);
+    assertThat(blocks).hasSizeGreaterThanOrEqualTo(2);
+    BlockData deletedBlock = blocks.get(0);
+    File deletedFile = TestContainerCorruptions.getBlock(target, deletedBlock.getLocalID());
+    File liveFile = TestContainerCorruptions.getBlock(target, blocks.get(1).getLocalID());
+    byte[] liveData = Files.readAllBytes(liveFile.toPath());
+    long initialBytes = target.getContainerData().getBytesUsed();
+    long initialCount = target.getContainerData().getBlockCount();
+    long checksum = dnClient.getContainerChecksumInfo(containerID, targetDN.getDatanodeDetails())
+        .getContainerMerkleTree().getDataChecksum();
+
+    // Only the peers receive the transaction; the target must reclaim the block through reconciliation.
+    List<DatanodeDetails> peers = cluster.getHddsDatanodes().stream().skip(1)
+        .map(HddsDatanodeService::getDatanodeDetails).collect(Collectors.toList());
+    for (DatanodeDetails peer : peers) {
+      HddsDatanodeService peerDN = cluster.getHddsDatanode(peer);
+      KeyValueContainer peerContainer = getContainer(peerDN, containerID);
+      DeletedBlocksTransaction transaction = DeletedBlocksTransaction.newBuilder()
+          .setTxID(peerContainer.getContainerData().getDeleteTransactionId() + 1)
+          .setContainerID(containerID).addLocalID(deletedBlock.getLocalID()).setCount(0)
+          .setTotalBlockSize(deletedBlock.getSize()).setTotalSizePerReplica(deletedBlock.getSize()).build();
+      DeleteBlocksCommandHandler deleteHandler = (DeleteBlocksCommandHandler)
+          peerDN.getDatanodeStateMachine().getCommandDispatcher().getDeleteBlocksCommandHandler();
+      assertThat(deleteHandler.executeCmdWithRetry(Collections.singletonList(transaction)))
+          .singleElement().satisfies(result -> assertThat(result.getSuccess()).isTrue());
+      peerDN.getDatanodeStateMachine().getContainer().getBlockDeletingService().runPeriodicalTaskNow();
+      assertReconciledDeletion(peerContainer, deletedBlock, initialCount - 1, initialBytes - deletedBlock.getSize());
+      assertThat(dnClient.getContainerChecksumInfo(containerID, peer).getContainerMerkleTree().getDataChecksum())
+          .isEqualTo(checksum);
+    }
+    assertThat(deletedFile).exists();
+    assertThat(target.getContainerData().getNumPendingDeletionBlocks()).isZero();
+
+    if (restartAfterFailure) {
+      KeyValueContainerData data = target.getContainerData();
+      try (DBHandle db = BlockUtils.getDB(data, conf);
+           MockedStatic<BlockUtils> blockUtils = mockStatic(BlockUtils.class)) {
+        DatanodeStore failingStore = spy(db.getStore());
+        BatchOperationHandler batches = mock(BatchOperationHandler.class, delegatesTo(db.getStore().getBatchHandler()));
+        doThrow(new RocksDatabaseException("Injected metadata commit failure")).when(batches)
+            .commitBatchOperation(any());
+        doReturn(batches).when(failingStore).getBatchHandler();
+        DBHandle failingDB = mock(DBHandle.class);
+        doReturn(failingStore).when(failingDB).getStore();
+        blockUtils.when(() -> BlockUtils.getDB(eq(data), any())).thenReturn(failingDB);
+
+        handler.reconcileContainer(dnClient, target, peers);
+        assertThat(deletedFile).doesNotExist();
+        assertThat(db.getStore().getBlockDataTable().get(data.getBlockKey(deletedBlock.getLocalID()))).isNotNull();
+        assertThat(db.getStore().getMetadataTable().get(data.getBlockCountKey())).isEqualTo(initialCount);
+        assertThat(data.getBytesUsed()).isEqualTo(initialBytes);
+        assertThat(readChecksumFile(data).getContainerMerkleTree().getBlockMerkleTreeList())
+            .anySatisfy(block -> {
+              assertThat(block.getBlockID()).isEqualTo(deletedBlock.getLocalID());
+              assertThat(block.getDeleted()).isTrue();
+            });
+      }
+      DatanodeDetails targetDetails = targetDN.getDatanodeDetails();
+      cluster.restartHddsDatanode(targetDetails, true);
+      targetDN = cluster.getHddsDatanode(targetDetails);
+      target = getContainer(targetDN, containerID);
+      assertThat(target.getContainerData().getBlockCount()).isEqualTo(initialCount);
+      assertThat(target.getContainerData().getState()).isEqualTo(ContainerProtos.ContainerDataProto.State.CLOSED);
+    }
+
+    // Wait for command completion, not checksum convergence: deletion does not change the checksum.
+    ReplicationSupervisor supervisor = targetDN.getDatanodeStateMachine().getSupervisor();
+    for (int attempt = 0; attempt < 2; attempt++) {
+      long completed = supervisor.getReplicationSuccessCount(ReconcileContainerTask.METRIC_NAME);
+      cluster.getStorageContainerLocationClient().reconcileContainer(containerID);
+      GenericTestUtils.waitFor(
+          () -> supervisor.getReplicationSuccessCount(ReconcileContainerTask.METRIC_NAME) > completed &&
+              supervisor.getInFlightReplications(ReconcileContainerTask.class) == 0, 100, 30_000);
+      assertReconciledDeletion(target, deletedBlock, initialCount - 1, initialBytes - deletedBlock.getSize());
+      assertThat(Files.readAllBytes(liveFile.toPath())).isEqualTo(liveData);
+    }
+  }
+
+  private static KeyValueContainer getContainer(HddsDatanodeService datanode, long containerID) {
+    return (KeyValueContainer) datanode.getDatanodeStateMachine().getContainer().getController()
+        .getContainer(containerID);
+  }
+
+  private static void assertReconciledDeletion(KeyValueContainer container, BlockData block,
+      long expectedCount, long expectedBytes) throws IOException {
+    KeyValueContainerData data = container.getContainerData();
+    assertThat(data.getLayoutVersion().getChunkFile(data, block.getBlockID(), null)).doesNotExist();
+    assertThat(data.getBlockCount()).isEqualTo(expectedCount);
+    assertThat(data.getBytesUsed()).isEqualTo(expectedBytes);
+    assertThat(data.getNumPendingDeletionBlocks()).isZero();
+    assertThat(data.getBlockPendingDeletionBytes()).isZero();
+    assertThat(data.getState()).isEqualTo(ContainerProtos.ContainerDataProto.State.CLOSED);
+    try (DBHandle db = BlockUtils.getDB(data, conf)) {
+      assertThat(db.getStore().getBlockDataTable().get(data.getBlockKey(block.getLocalID()))).isNull();
+      assertThat(db.getStore().getLastChunkInfoTable().get(data.getBlockKey(block.getLocalID()))).isNull();
+      assertThat(db.getStore().getMetadataTable().get(data.getBlockCountKey())).isEqualTo(expectedCount);
+      assertThat(db.getStore().getMetadataTable().get(data.getBytesUsedKey())).isEqualTo(expectedBytes);
+    }
   }
 
   @Test
