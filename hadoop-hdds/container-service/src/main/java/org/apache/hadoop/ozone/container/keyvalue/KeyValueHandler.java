@@ -71,7 +71,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.Striped;
 import java.io.File;
 import java.io.FileNotFoundException;
-import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -83,7 +82,9 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -127,6 +128,7 @@ import org.apache.hadoop.hdds.security.token.OzoneBlockTokenIdentifier;
 import org.apache.hadoop.hdds.upgrade.HDDSLayoutFeature;
 import org.apache.hadoop.hdds.utils.FaultInjector;
 import org.apache.hadoop.hdds.utils.HddsServerUtil;
+import org.apache.hadoop.hdds.utils.db.BatchOperation;
 import org.apache.hadoop.hdds.utils.db.CodecException;
 import org.apache.hadoop.hdds.utils.io.RandomAccessFileChannel;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
@@ -1862,8 +1864,7 @@ public class KeyValueHandler extends Handler {
         if (previousDataChecksum == latestDataChecksum) {
           if (numCorruptChunksRepaired != 0 ||
               numMissingBlocksRepaired != 0 ||
-              numMissingChunksRepaired != 0 ||
-              numDivergedDeletedBlocksUpdated != 0) {
+              numMissingChunksRepaired != 0) {
             // This condition should never happen.
             LOG.error("Checksum of container was not updated but blocks were repaired.");
           }
@@ -1892,6 +1893,30 @@ public class KeyValueHandler extends Handler {
       }
     }
 
+    // Retry all persisted deletions, not only this round's diff. A prior attempt may have saved the deleted
+    // entry but failed to remove the data or commit its metadata changes.
+    Set<Long> unreferencedBlocks = new HashSet<>();
+    for (ContainerProtos.BlockMerkleTree block : latestChecksumInfo.getContainerMerkleTree().getBlockMerkleTreeList()) {
+      if (block.getDeleted()) {
+        try {
+          if (deleteBlockForReconciliation(kvContainer, block.getBlockID())) {
+            unreferencedBlocks.add(block.getBlockID());
+          }
+        } catch (IOException ex) {
+          LOG.error("Failed to delete block {} from container {} during reconciliation; will retry next time",
+              block.getBlockID(), containerID, ex);
+        }
+      }
+    }
+
+    // Check orphan files in one directory pass, not once for every previously deleted block.
+    container.writeLock();
+    try {
+      deleteUnreferenced(container, unreferencedBlocks);
+    } finally {
+      container.writeUnlock();
+    }
+
     // Log a summary after reconciling with all peers.
     long originalDataChecksum = ContainerChecksumTreeManager.getDataChecksum(originalChecksumInfo);
     long latestDataChecksum = ContainerChecksumTreeManager.getDataChecksum(latestChecksumInfo);
@@ -1911,6 +1936,57 @@ public class KeyValueHandler extends Handler {
     // Trigger on demand scanner, which will build the merkle tree based on the newly ingested data.
     containerSet.scanContainerWithoutGap(containerID, "Container reconciliation");
     sendICR(container);
+  }
+
+  /** @return true if metadata is now absent and orphan files can be removed. */
+  private boolean deleteBlockForReconciliation(KeyValueContainer container, long localID) throws IOException {
+    KeyValueContainerData data = container.getContainerData();
+    container.writeLock();
+    try (DBHandle db = BlockUtils.getDB(data, conf)) {
+      String blockKey = data.getBlockKey(localID);
+      BlockData block;
+      try {
+        block = db.getStore().getBlockByID(new BlockID(data.getContainerID(), localID), blockKey);
+      } catch (StorageContainerException ex) {
+        if (ex.getResult() != ContainerProtos.Result.NO_SUCH_BLOCK) {
+          throw ex;
+        }
+        // Schema V1 moves queued blocks to a deleting key. Leave their data and accounting to BlockDeletingTask.
+        if (OzoneConsts.SCHEMA_V1.equals(data.getSchemaVersion()) &&
+            db.getStore().getBlockDataTable().get(data.getDeletingBlockKey(localID)) != null) {
+          return false;
+        }
+        return true;
+      }
+
+      long releasedBytes = KeyValueContainerUtil.getBlockLength(block);
+      // The whole block is deleted, including corrupt/truncated chunks that the normal chunk-delete path rejects.
+      Set<File> files = new HashSet<>();
+      if (data.getLayoutVersion() == ContainerLayoutVersion.FILE_PER_BLOCK) {
+        files.add(data.getLayoutVersion().getChunkFile(data, block.getBlockID(), null));
+      } else {
+        for (ContainerProtos.ChunkInfo chunk : block.getChunks()) {
+          files.add(data.getLayoutVersion().getChunkFile(data, block.getBlockID(), chunk.getChunkName()));
+        }
+      }
+      deleteBlockFiles(container, files);
+      try (BatchOperation batch = db.getStore().getBatchHandler().initBatchOperation()) {
+        db.getStore().getBlockDataTable().deleteWithBatch(batch, blockKey);
+        if (db.getStore().getLastChunkInfoTable() != null) {
+          db.getStore().getLastChunkInfoTable().deleteWithBatch(batch, blockKey);
+        }
+        // Pending SCM transactions are processed independently, even if their blocks have already been reclaimed.
+        data.updateAndCommitDBCounters(db, batch, 1, releasedBytes, 0, 0);
+      }
+      data.getStatistics().decDeletion(releasedBytes, 0, 1, 0);
+      data.getVolume().decrementUsedSpace(releasedBytes);
+      if (!container.hasBlocks()) {
+        data.markAsEmpty();
+      }
+      return true;
+    } finally {
+      container.writeUnlock();
+    }
   }
 
   /**
@@ -2227,52 +2303,66 @@ public class KeyValueHandler extends Handler {
   @Override
   public void deleteUnreferenced(Container container, long localID)
       throws IOException {
+    deleteUnreferenced(container, Collections.singleton(localID));
+  }
+
+  private void deleteUnreferenced(Container container, Collection<Long> localIDs) throws IOException {
+    if (localIDs.isEmpty()) {
+      return;
+    }
     // Since the block/chunk is already checked that is unreferenced, no
     // need to lock the container here.
-    StringBuilder prefixBuilder = new StringBuilder();
+    String delimiter;
     ContainerLayoutVersion layoutVersion = container.getContainerData().
         getLayoutVersion();
     long containerID = container.getContainerData().getContainerID();
     // Only supports the default chunk/block name format now
     switch (layoutVersion) {
     case FILE_PER_BLOCK:
-      prefixBuilder.append(localID).append(".block");
+      delimiter = ".block";
       break;
     case FILE_PER_CHUNK:
-      prefixBuilder.append(localID).append("_chunk_");
+      delimiter = "_chunk_";
       break;
     default:
       throw new IOException("Unsupported container layout version " +
           layoutVersion + " for the container " + containerID);
     }
-    String prefix = prefixBuilder.toString();
+    Set<String> blockIDs = localIDs.stream().map(String::valueOf).collect(Collectors.toSet());
     File chunkDir = ContainerUtils.getChunkDir(container.getContainerData());
     // chunkNames here is an array of file/dir name, so if we cannot find any
     // matching one, it means the client did not write any chunk into the block.
     // Since the putBlock request may fail, we don't know if the chunk exists,
     // thus we need to check it when receiving the request to delete such blocks
-    String[] chunkNames = getFilesWithPrefix(prefix, chunkDir);
+    String[] chunkNames = chunkDir.list((dir, name) -> {
+      int delimiterIndex = name.indexOf(delimiter);
+      return delimiterIndex > 0 && blockIDs.contains(name.substring(0, delimiterIndex));
+    });
     if (chunkNames == null) {
       throw new IOException("Failed to list chunks under " + chunkDir
-          + " for unreferenced block " + localID + " in container "
+          + " for unreferenced block " + localIDs.stream().map(String::valueOf).collect(Collectors.joining(", "))
+          + " in container "
           + containerID);
     }
     if (chunkNames.length == 0) {
-      LOG.warn("Missing delete block(Container = {}, Block = {}",
-          containerID, localID);
+      LOG.debug("No unreferenced files for deleted blocks in container {}", containerID);
       return;
     }
-    for (String name: chunkNames) {
-      File file = new File(chunkDir, name);
-      if (!file.isFile()) {
+    List<File> files = Arrays.stream(chunkNames).map(name -> new File(chunkDir, name)).collect(Collectors.toList());
+    deleteBlockFiles(container, files);
+  }
+
+  private void deleteBlockFiles(Container container, Collection<File> files) throws IOException {
+    long containerID = container.getContainerData().getContainerID();
+    for (File file : files) {
+      if (!file.exists()) {
         continue;
       }
-      if (!deleteUnreferencedFile(file)) {
+      if (!file.isFile() || !deleteUnreferencedFile(file)) {
         throw new IOException("Failed to delete unreferenced chunk/block "
             + file + " in container " + containerID);
       }
-      LOG.info("Deleted unreferenced chunk/block {} in container {}", name,
-          containerID);
+      LOG.info("Deleted chunk/block {} in container {}", file, containerID);
     }
   }
 
@@ -2455,11 +2545,6 @@ public class KeyValueHandler extends Handler {
   public boolean isFinalizedBlockExist(Container container, long localID) {
     KeyValueContainer keyValueContainer = (KeyValueContainer)container;
     return keyValueContainer.getContainerData().isFinalizedBlockExist(localID);
-  }
-
-  private String[] getFilesWithPrefix(String prefix, File chunkDir) {
-    FilenameFilter filter = (dir, name) -> name.startsWith(prefix);
-    return chunkDir.list(filter);
   }
 
   private boolean logBlocksIfNonZero(Container container)

@@ -27,9 +27,11 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.apache.hadoop.hdds.StringUtils;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
@@ -40,6 +42,7 @@ import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.ozone.common.Checksum;
 import org.apache.hadoop.ozone.common.ChecksumData;
 import org.apache.hadoop.ozone.common.OzoneChecksumException;
+import org.apache.hadoop.ozone.container.checksum.ContainerChecksumTreeManager;
 import org.apache.hadoop.ozone.container.checksum.ContainerMerkleTreeWriter;
 import org.apache.hadoop.ozone.container.common.helpers.BlockData;
 import org.apache.hadoop.ozone.container.common.helpers.ChunkInfo;
@@ -222,6 +225,7 @@ public class KeyValueContainerCheck {
       return errors;
     }
 
+    Set<Long> deletedBlocks = new HashSet<>();
     try {
       try (DBHandle db = BlockUtils.getDB(containerDataFromDisk, checkConfig);
            BlockIterator<BlockData> kvIter = db.getStore().getBlockIterator(
@@ -230,7 +234,7 @@ public class KeyValueContainerCheck {
         // If the container was deleted during the scan, stop trying to process its data.
         while (kvIter.hasNext() && !containerIsDeleted()) {
           List<ContainerScanError> blockErrors = scanBlock(db, dbFile, kvIter.nextBlock(), throttler, canceler,
-              currentTree);
+              currentTree, deletedBlocks);
           errors.addAll(blockErrors);
         }
       }
@@ -317,27 +321,42 @@ public class KeyValueContainerCheck {
   }
 
   /**
-   *  Attempt to read the block data with the container lock.
+   *  Check whether the block still requires data with the container lock.
    *  The container lock ensure the latest DB record could be retrieved, since
    *  other block related write operation will acquire the container write lock.
    *
    * @param db DB of container
    * @param block last queried blockData
-   * @return blockData in DB
+   * @param deletedBlocks blocks already known to be deleted in this scan
+   * @return whether the block still requires data on disk
    * @throws IOException
    */
-  private boolean blockInDBWithLock(DBHandle db, BlockData block)
+  private boolean blockNeedsDataWithLock(DBHandle db, BlockData block, Set<Long> deletedBlocks)
       throws IOException {
     container.readLock();
     try {
-      return getBlockDataFromDB(db, block) != null;
+      if (deletedBlocks.contains(block.getLocalID()) || getBlockDataFromDB(db, block) == null) {
+        return false;
+      }
+      // Reconciliation persists the deleted entry before removing files. A failed metadata commit must not
+      // turn that recoverable deletion into permanent container corruption.
+      // Cache only confirmed deletes; a miss must read the latest tree to observe concurrent reconciliation.
+      ContainerProtos.ContainerChecksumInfo checksumInfo =
+          ContainerChecksumTreeManager.readChecksumInfo(containerDataFromMemory);
+      for (ContainerProtos.BlockMerkleTree entry : checksumInfo.getContainerMerkleTree().getBlockMerkleTreeList()) {
+        if (entry.getDeleted()) {
+          deletedBlocks.add(entry.getBlockID());
+        }
+      }
+      return !deletedBlocks.contains(block.getLocalID());
     } finally {
       container.readUnlock();
     }
   }
 
   private List<ContainerScanError> scanBlock(DBHandle db, File dbFile, BlockData block,
-      DataTransferThrottler throttler, Canceler canceler, ContainerMerkleTreeWriter currentTree) {
+      DataTransferThrottler throttler, Canceler canceler, ContainerMerkleTreeWriter currentTree,
+      Set<Long> deletedBlocks) {
     ContainerLayoutVersion layout = containerDataFromDisk.getLayoutVersion();
 
     List<ContainerScanError> blockErrors = new ArrayList<>();
@@ -397,10 +416,9 @@ public class KeyValueContainerCheck {
     }
 
     try {
-      if (fileMissing && !blockInDBWithLock(db, block)) {
-        // The chunk/block file was missing from the disk, but after checking the DB with a lock it is not there either.
-        // This means the block was deleted while the scan was running (without a lock) and all errors in this block
-        // can be ignored.
+      if (fileMissing && !blockNeedsDataWithLock(db, block, deletedBlocks)) {
+        // The block was deleted concurrently, or reconciliation has persisted its deletion but not removed the
+        // metadata yet. In both cases the missing data is expected.
         blockErrors.clear();
         if (LOG.isDebugEnabled()) {
           LOG.debug("Scanned outdated blockData {} in container {}", block, containerID);

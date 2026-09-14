@@ -22,6 +22,7 @@ import static org.apache.hadoop.ozone.container.checksum.ContainerMerkleTreeTest
 import static org.apache.hadoop.ozone.container.checksum.ContainerMerkleTreeTestUtils.buildTestTreeWithMismatches;
 import static org.apache.hadoop.ozone.container.checksum.ContainerMerkleTreeTestUtils.getDeletedBlockData;
 import static org.apache.hadoop.ozone.container.checksum.ContainerMerkleTreeTestUtils.updateTreeProto;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -72,6 +73,24 @@ public class TestContainerDiff {
     if (checksumManager != null) {
       checksumManager.stop();
     }
+  }
+
+  @Test
+  void testDeletedFlagDiffersWithIdenticalChecksums() throws Exception {
+    ContainerProtos.ContainerMerkleTree liveTree = buildTestTree(config).toProto();
+    ContainerProtos.BlockMerkleTree block = liveTree.getBlockMerkleTree(0);
+    ContainerMerkleTreeWriter deletedTree = new ContainerMerkleTreeWriter(liveTree);
+    deletedTree.setDeletedBlock(block.getBlockID(), block.getDataChecksum());
+    ContainerProtos.ContainerChecksumInfo local = ContainerProtos.ContainerChecksumInfo.newBuilder()
+        .setContainerID(CONTAINER_ID).setContainerMerkleTree(liveTree).build();
+    ContainerProtos.ContainerChecksumInfo peer =
+        local.toBuilder().setContainerMerkleTree(deletedTree.toProto()).build();
+
+    assertThat(peer.getContainerMerkleTree().getDataChecksum()).isEqualTo(liveTree.getDataChecksum());
+    assertThat(checksumManager.diff(local, peer).getDivergedDeletedBlocks())
+        .extracting(ContainerDiffReport.DeletedBlock::getBlockID).containsExactly(block.getBlockID());
+    assertThat(checksumManager.diff(peer, local).needsRepair()).isFalse();
+    assertThat(checksumManager.diff(peer, peer).needsRepair()).isFalse();
   }
 
   /**

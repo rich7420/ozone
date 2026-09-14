@@ -120,10 +120,7 @@ public class ContainerChecksumTreeManager {
     ContainerProtos.ContainerMerkleTree thisMerkleTree = thisChecksumInfo.getContainerMerkleTree();
     ContainerProtos.ContainerMerkleTree peerMerkleTree = peerChecksumInfo.getContainerMerkleTree();
 
-    if (thisMerkleTree.getDataChecksum() == peerMerkleTree.getDataChecksum()) {
-      return;
-    }
-
+    // Deleted flags are not included in data checksums, so equal checksums can still hide missed deletions.
     List<ContainerProtos.BlockMerkleTree> thisBlockMerkleTreeList = thisMerkleTree.getBlockMerkleTreeList();
     List<ContainerProtos.BlockMerkleTree> peerBlockMerkleTreeList = peerMerkleTree.getBlockMerkleTreeList();
     int thisIdx = 0, peerIdx = 0;
@@ -134,7 +131,8 @@ public class ContainerChecksumTreeManager {
       ContainerProtos.BlockMerkleTree peerBlockMerkleTree = peerBlockMerkleTreeList.get(peerIdx);
 
       if (thisBlockMerkleTree.getBlockID() == peerBlockMerkleTree.getBlockID()) {
-        if (thisBlockMerkleTree.getDataChecksum() != peerBlockMerkleTree.getDataChecksum()) {
+        if (thisBlockMerkleTree.getDataChecksum() != peerBlockMerkleTree.getDataChecksum() ||
+            thisBlockMerkleTree.getDeleted() != peerBlockMerkleTree.getDeleted()) {
           compareBlockMerkleTree(thisBlockMerkleTree, peerBlockMerkleTree, report);
         }
         thisIdx++;
@@ -198,11 +196,7 @@ public class ContainerChecksumTreeManager {
     } else {
       if (peerBlockDeleted) {
         // Our block has not yet been deleted, but peer's block has been.
-        // Mark our block as deleted to bring it in sync with the peer.
-        // Our block deleting service will eventually catch up.
-        // Our container scanner will not update this deleted block in the merkle tree further even if it is still on
-        // disk so that we remain in sync with the peer.
-        // TODO HDDS-11765 Add support for deleting blocks from our replica when a peer has already deleted the block.
+        // Reconciliation persists the deleted entry before removing the local block.
         report.addDivergedDeletedBlock(peerBlockMerkleTree);
       } else {
         // Neither our nor peer's block is deleted. Walk the chunk list to find differences.

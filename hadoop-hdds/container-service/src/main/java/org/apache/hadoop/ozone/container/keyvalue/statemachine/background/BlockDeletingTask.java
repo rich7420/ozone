@@ -401,7 +401,7 @@ public class BlockDeletingTask implements BackgroundTask {
         // done here so that all the DB updates for block delete can be
         // batched together while committing to DB.
         containerData.updateAndCommitDBCounters(meta, batch,
-            deletedBlocksCount, releasedBytes);
+            deletedBlocksCount, releasedBytes, deletedBlocksProcessed, processedBytes);
         // Once DB update is persisted, check if there are any blocks
         // remaining in the DB. This will determine whether the container
         // can be deleted by SCM.
@@ -495,7 +495,7 @@ public class BlockDeletingTask implements BackgroundTask {
           // TODO: handle the bytesReleased correctly for the unexpected exception.
         }
       }
-      bytesProcessed += entry.getTotalBlockSize();
+      bytesProcessed += entry.getTotalSizePerReplica();
       deletedBlocksTxs.add(entry);
       Duration execTime = Duration.between(startTime, Instant.now());
       if (deletedBlocksTxs.size() < delBlocks.size() &&

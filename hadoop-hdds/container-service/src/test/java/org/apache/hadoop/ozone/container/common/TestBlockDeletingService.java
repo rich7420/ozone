@@ -27,6 +27,7 @@ import static org.apache.hadoop.ozone.container.common.ContainerTestUtils.WRITE_
 import static org.apache.hadoop.ozone.container.common.ContainerTestUtils.createDbInstancesForTestIfNeeded;
 import static org.apache.hadoop.ozone.container.common.impl.ContainerImplTestUtils.newContainerSet;
 import static org.apache.hadoop.ozone.container.common.impl.ContainerLayoutVersion.FILE_PER_BLOCK;
+import static org.apache.hadoop.ozone.container.common.impl.ContainerLayoutVersion.FILE_PER_CHUNK;
 import static org.apache.hadoop.ozone.container.keyvalue.helpers.KeyValueContainerUtil.isSameSchemaVersion;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -43,11 +44,14 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -280,13 +284,23 @@ public class TestBlockDeletingService {
 
   private void createTxn(KeyValueContainerData data, List<Long> containerBlocks,
       int txnID, long containerID) {
+    long size = containerBlocks.size() * BLOCK_CHUNK_SIZE;
+    createTxn(data, containerBlocks, txnID, containerID, size, size);
+  }
+
+  private void createTxn(KeyValueContainerData data, List<Long> containerBlocks, int txnID, long containerID,
+      long blockSize, Long sizePerReplica) {
     try (DBHandle metadata = BlockUtils.getDB(data, conf)) {
-      StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction dtx =
+      StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction.Builder builder =
           StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction
               .newBuilder().setTxID(txnID).setContainerID(containerID)
               .addAllLocalID(containerBlocks)
-              .setTotalBlockSize(containerBlocks.size() * BLOCK_CHUNK_SIZE)
-              .setCount(0).build();
+              .setTotalBlockSize(blockSize)
+              .setCount(0);
+      if (sizePerReplica != null) {
+        builder.setTotalSizePerReplica(sizePerReplica);
+      }
+      DeletedBlocksTransaction dtx = builder.build();
       try (BatchOperation batch = metadata.getStore().getBatchHandler()
           .initBatchOperation()) {
         DatanodeStore ds = metadata.getStore();
@@ -420,6 +434,108 @@ public class TestBlockDeletingService {
     }
   }
 
+  @ContainerTestVersionInfo.ContainerTest
+  void testReconciliationBeforePendingDeletion(ContainerTestVersionInfo versionInfo) throws Exception {
+    setLayoutAndSchemaForTest(versionInfo);
+    ContainerSet containerSet = newContainerSet();
+    KeyValueContainerData data = createToDeleteBlocks(containerSet, 2, 1);
+    KeyValueContainer container = (KeyValueContainer) containerSet.getContainer(data.getContainerID());
+    KeyValueHandler handler = ContainerTestUtils.getKeyValueHandler(conf, datanodeUuid, containerSet, volumeSet,
+        ContainerMetrics.create(conf));
+    boolean schemaOne = isSameSchemaVersion(schemaVersion, SCHEMA_V1);
+    try (DBHandle db = BlockUtils.getDB(data, conf)) {
+      BlockData block = db.getStore().getBlockDataTable().getRangeKVs(data.startKeyEmpty(), 1, data.containerPrefix(),
+          schemaOne ? data.getDeletingBlockKeyFilter() : data.getUnprefixedKeyFilter(), true).get(0).getValue();
+      handler.getChecksumManager().addDeletedBlocks(data, Collections.singletonList(block));
+      File extraChunk = null;
+      if (!schemaOne) {
+        File file = layout.getChunkFile(data, block.getBlockID(), block.getChunks().get(0).getChunkName());
+        try (FileChannel channel = FileChannel.open(file.toPath(), StandardOpenOption.WRITE)) {
+          channel.truncate(1);
+        }
+        if (layout == FILE_PER_CHUNK) {
+          extraChunk = new File(data.getChunksPath(), block.getLocalID() + "_chunk_extra.tmp.1.1");
+          Files.createFile(extraChunk.toPath());
+        }
+      }
+
+      handler.reconcileContainer(null, container, Collections.emptyList());
+      if (extraChunk != null) {
+        assertThat(extraChunk).doesNotExist();
+      }
+      assertThat(data.getBlockCount()).isEqualTo(schemaOne ? 2 : 1);
+      assertThat(data.getBytesUsed()).isEqualTo((schemaOne ? 2 : 1) * BLOCK_CHUNK_SIZE);
+      assertThat(data.getNumPendingDeletionBlocks()).isEqualTo(2);
+      assertThat(data.getBlockPendingDeletionBytes()).isEqualTo(2 * BLOCK_CHUNK_SIZE);
+      assertThat(db.getStore().getMetadataTable().get(data.getPendingDeleteBlockCountKey())).isEqualTo(2L);
+      assertThat(db.getStore().getMetadataTable().get(data.getPendingDeleteBlockBytesKey()))
+          .isEqualTo(2L * BLOCK_CHUNK_SIZE);
+
+      // Replaying reconciliation must not consume the pending SCM transaction or decrement block counters again.
+      handler.reconcileContainer(null, container, Collections.emptyList());
+      assertThat(data.getBlockCount()).isEqualTo(schemaOne ? 2 : 1);
+
+      BlockDeletingService service = new BlockDeletingService(mockDependencies(containerSet, handler),
+          1_000_000, 1_000_000, TimeUnit.SECONDS, 1, conf, handler.getChecksumManager());
+      try {
+        service.runPeriodicalTaskNow();
+      } finally {
+        service.shutdown();
+      }
+      assertThat(data.getBlockCount()).isZero();
+      assertThat(data.getBytesUsed()).isZero();
+      assertThat(data.getNumPendingDeletionBlocks()).isZero();
+      assertThat(data.getBlockPendingDeletionBytes()).isZero();
+      assertThat(db.getStore().getMetadataTable().get(data.getBlockCountKey())).isEqualTo(0L);
+      assertThat(db.getStore().getMetadataTable().get(data.getBytesUsedKey())).isEqualTo(0L);
+      assertThat(db.getStore().getMetadataTable().get(data.getPendingDeleteBlockCountKey())).isEqualTo(0L);
+      assertThat(db.getStore().getMetadataTable().get(data.getPendingDeleteBlockBytesKey())).isEqualTo(0L);
+      assertThat(new File(data.getChunksPath()).listFiles()).isEmpty();
+      File orphan = layout.getChunkFile(data, block.getBlockID(), block.getChunks().get(0).getChunkName());
+      Files.createFile(orphan.toPath());
+      handler.reconcileContainer(null, container, Collections.emptyList());
+      assertThat(orphan).doesNotExist();
+      assertThat(data.getBlockCount()).isZero();
+      assertThat(data.getBytesUsed()).isZero();
+    }
+  }
+
+  @ContainerTestVersionInfo.ContainerTest
+  void testPendingBytesUsePerReplicaSize(ContainerTestVersionInfo versionInfo) throws Exception {
+    setLayoutAndSchemaForTest(versionInfo);
+    if (isSameSchemaVersion(schemaVersion, SCHEMA_V1)) {
+      return;
+    }
+    ContainerSet containerSet = newContainerSet();
+    KeyValueHandler handler = ContainerTestUtils.getKeyValueHandler(conf, datanodeUuid, containerSet, volumeSet,
+        ContainerMetrics.create(conf));
+    // EC uses a different logical size; older transactions may omit the per-replica size entirely.
+    for (Long sizePerReplica : new Long[] {(long) BLOCK_CHUNK_SIZE, null}) {
+      KeyValueContainerData data = createToDeleteBlocks(containerSet, 1, 1);
+      try (DBHandle db = BlockUtils.getDB(data, conf)) {
+        BlockData block = db.getStore().getBlockDataTable().getRangeKVs(data.startKeyEmpty(), 1, data.containerPrefix(),
+            data.getUnprefixedKeyFilter(), true).get(0).getValue();
+        createTxn(data, Collections.singletonList(block.getLocalID()), 1, data.getContainerID(),
+            3L * BLOCK_CHUNK_SIZE, sizePerReplica);
+        long pendingBytes = sizePerReplica == null ? 0 : sizePerReplica;
+        data.getStatistics().setBlockPendingDeletion(1, pendingBytes);
+        db.getStore().getMetadataTable().put(data.getPendingDeleteBlockBytesKey(), pendingBytes);
+        BlockDeletingService service = new BlockDeletingService(mockDependencies(containerSet, handler),
+            1_000_000, 1_000_000, TimeUnit.SECONDS, 1, conf, handler.getChecksumManager());
+        try {
+          service.runPeriodicalTaskNow();
+        } finally {
+          service.shutdown();
+        }
+        assertThat(data.getBlockCount()).isZero();
+        assertThat(data.getBytesUsed()).isZero();
+        assertThat(data.getNumPendingDeletionBlocks()).isZero();
+        assertThat(data.getBlockPendingDeletionBytes()).isZero();
+        assertThat(db.getStore().getMetadataTable().get(data.getPendingDeleteBlockCountKey())).isEqualTo(0L);
+        assertThat(db.getStore().getMetadataTable().get(data.getPendingDeleteBlockBytesKey())).isEqualTo(0L);
+      }
+    }
+  }
 
   /**
    * In some cases, the pending delete blocks metadata will become larger

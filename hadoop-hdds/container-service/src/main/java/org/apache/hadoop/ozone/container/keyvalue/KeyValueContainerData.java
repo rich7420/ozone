@@ -380,6 +380,15 @@ public class KeyValueContainerData extends ContainerData {
   public void updateAndCommitDBCounters(DBHandle db,
       BatchOperation batchOperation, int deletedBlockCount,
       long releasedBytes) throws IOException {
+    updateAndCommitDBCounters(db, batchOperation, deletedBlockCount, releasedBytes, deletedBlockCount, releasedBytes);
+  }
+
+  /**
+   * Update block counters separately from the SCM deletion work consumed. Reconciliation can delete blocks
+   * without consuming pending transactions, and a later transaction can refer to an already deleted block.
+   */
+  public void updateAndCommitDBCounters(DBHandle db, BatchOperation batchOperation, int deletedBlockCount,
+      long releasedBytes, int processedBlockCount, long processedBytes) throws IOException {
     Table<String, Long> metadataTable = db.getStore().getMetadataTable();
 
     // Set Bytes used and block count key.
@@ -387,10 +396,10 @@ public class KeyValueContainerData extends ContainerData {
     metadataTable.putWithBatch(batchOperation, getBytesUsedKey(), b.getBytes() - releasedBytes);
     metadataTable.putWithBatch(batchOperation, getBlockCountKey(), b.getCount() - deletedBlockCount);
     metadataTable.putWithBatch(batchOperation, getPendingDeleteBlockCountKey(),
-        b.getPendingDeletion() - deletedBlockCount);
+        b.getPendingDeletion() - processedBlockCount);
     if (VersionedDatanodeFeatures.isFinalized(HDDSLayoutFeature.STORAGE_SPACE_DISTRIBUTION)) {
       metadataTable.putWithBatch(batchOperation, getPendingDeleteBlockBytesKey(),
-          b.getPendingDeletionBytes() - releasedBytes);
+          b.getPendingDeletionBytes() - processedBytes);
     }
 
     db.getStore().getBatchHandler().commitBatchOperation(batchOperation);

@@ -34,7 +34,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import  static org.mockito.Mockito.spy;
 
 import java.io.File;
@@ -63,6 +65,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.text.RandomStringGenerator;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.hdds.client.BlockID;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
@@ -71,6 +74,8 @@ import org.apache.hadoop.hdds.scm.XceiverClientSpi;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.storage.ContainerProtocolCalls;
 import org.apache.hadoop.hdds.utils.db.BatchOperation;
+import org.apache.hadoop.hdds.utils.db.BatchOperationHandler;
+import org.apache.hadoop.hdds.utils.db.RocksDatabaseException;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.common.Checksum;
 import org.apache.hadoop.ozone.common.ChecksumData;
@@ -84,11 +89,13 @@ import org.apache.hadoop.ozone.container.common.interfaces.DBHandle;
 import org.apache.hadoop.ozone.container.common.volume.MutableVolumeSet;
 import org.apache.hadoop.ozone.container.common.volume.StorageVolume;
 import org.apache.hadoop.ozone.container.keyvalue.helpers.BlockUtils;
+import org.apache.hadoop.ozone.container.metadata.DatanodeStore;
 import org.apache.hadoop.ozone.container.ozoneimpl.ContainerController;
 import org.apache.hadoop.ozone.container.ozoneimpl.ContainerScannerConfiguration;
 import org.apache.hadoop.ozone.container.ozoneimpl.OnDemandContainerScanner;
 import org.apache.ozone.test.GenericTestUtils;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
+import org.apache.ratis.util.function.CheckedSupplier;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
@@ -128,6 +135,144 @@ public class TestContainerReconciliationWithMockDatanodes {
   private static final int NUM_DATANODES = 3;
 
   private static final String TEST_SCAN = "Test Scan";
+
+  @Test
+  void testReconcileMissedDeletionWithMatchingChecksum() throws Exception {
+    long containerID = 101L;
+    MockDatanode local = datanodes.get(0);
+    MockDatanode peer = datanodes.get(1);
+    local.addContainerWithBlocks(containerID, 2);
+    peer.addContainerWithBlocks(containerID, 2);
+    KeyValueContainer container = local.getContainer(containerID);
+    KeyValueContainerData data = container.getContainerData();
+    BlockData deletedBlock = peer.getSortedBlocks(peer.getContainer(containerID)).get(0);
+    peer.handler.getChecksumManager().addDeletedBlocks(peer.getContainer(containerID).getContainerData(),
+        Collections.singletonList(deletedBlock));
+    peer.handler.deleteBlock(peer.getContainer(containerID), deletedBlock);
+    assertThat(local.checkAndGetDataChecksum(containerID)).isEqualTo(peer.checkAndGetDataChecksum(containerID));
+    File blockFile = TestContainerCorruptions.getBlock(container, deletedBlock.getLocalID());
+    assertThat(blockFile).exists();
+    long initialBytes = data.getBytesUsed();
+    long initialVolumeBytes = data.getVolume().getCurrentUsage().getUsedSpace();
+
+    local.reconcileContainer(dnClient, Collections.singletonList(peer.dnDetails), containerID);
+    assertDeletedBlock(local, container, deletedBlock, initialBytes - deletedBlock.getSize());
+    assertThat(data.getVolume().getCurrentUsage().getUsedSpace())
+        .isEqualTo(initialVolumeBytes - deletedBlock.getSize());
+    local.reconcileContainer(dnClient, Collections.singletonList(peer.dnDetails), containerID);
+    assertDeletedBlock(local, container, deletedBlock, initialBytes - deletedBlock.getSize());
+    assertThat(data.getVolume().getCurrentUsage().getUsedSpace())
+        .isEqualTo(initialVolumeBytes - deletedBlock.getSize());
+    local.awaitScan(containerID);
+  }
+
+  @Test
+  void testReconcileDeletionRetriesFailedMetadataCommit() throws Exception {
+    long containerID = 102L;
+    MockDatanode local = datanodes.get(0);
+    local.addContainerWithBlocks(containerID, 2);
+    KeyValueContainer container = local.getContainer(containerID);
+    KeyValueContainerData data = container.getContainerData();
+    BlockData deletedBlock = local.getSortedBlocks(container).get(0);
+    local.handler.getChecksumManager().addDeletedBlocks(data, Collections.singletonList(deletedBlock));
+    long initialBytes = data.getBytesUsed();
+    long initialVolumeBytes = data.getVolume().getCurrentUsage().getUsedSpace();
+
+    try (DBHandle db = BlockUtils.getDB(data, local.conf);
+         MockedStatic<BlockUtils> blockUtils = Mockito.mockStatic(BlockUtils.class)) {
+      DatanodeStore store = spy(db.getStore());
+      BatchOperationHandler batches = mock(BatchOperationHandler.class,
+          org.mockito.AdditionalAnswers.delegatesTo(store.getBatchHandler()));
+      doThrow(new RocksDatabaseException("Injected metadata commit failure")).when(batches).commitBatchOperation(any());
+      doReturn(batches).when(store).getBatchHandler();
+      DBHandle failingDB = mock(DBHandle.class);
+      doReturn(store).when(failingDB).getStore();
+      blockUtils.when(() -> BlockUtils.getDB(data, local.conf)).thenReturn(failingDB);
+
+      local.reconcileContainer(dnClient, Collections.emptyList(), containerID);
+      assertThat(data.getLayoutVersion().getChunkFile(data, deletedBlock.getBlockID(), null)).doesNotExist();
+      assertThat(db.getStore().getBlockDataTable().get(data.getBlockKey(deletedBlock.getLocalID()))).isNotNull();
+      assertThat(data.getBlockCount()).isEqualTo(2);
+      assertThat(data.getBytesUsed()).isEqualTo(initialBytes);
+      assertThat(data.getVolume().getCurrentUsage().getUsedSpace()).isEqualTo(initialVolumeBytes);
+      local.awaitScan(containerID);
+      assertThat(data.getState()).isEqualTo(ContainerProtos.ContainerDataProto.State.CLOSED);
+    }
+
+    // Both trees can already agree on the tombstone: cleanup must not depend on a new peer diff.
+    local.reconcileContainer(dnClient, Collections.emptyList(), containerID);
+    assertDeletedBlock(local, container, deletedBlock, initialBytes - deletedBlock.getSize());
+    assertThat(data.getVolume().getCurrentUsage().getUsedSpace())
+        .isEqualTo(initialVolumeBytes - deletedBlock.getSize());
+    local.awaitScan(containerID);
+    assertThat(data.getState()).isEqualTo(ContainerProtos.ContainerDataProto.State.CLOSED);
+  }
+
+  private static void assertDeletedBlock(MockDatanode local, KeyValueContainer container, BlockData deletedBlock,
+      long expectedBytes) throws IOException {
+    KeyValueContainerData data = container.getContainerData();
+    assertThat(data.getLayoutVersion().getChunkFile(data, deletedBlock.getBlockID(), null)).doesNotExist();
+    assertThat(data.getBlockCount()).isEqualTo(1);
+    assertThat(data.getBytesUsed()).isEqualTo(expectedBytes);
+    assertThat(data.getNumPendingDeletionBlocks()).isZero();
+    try (DBHandle db = BlockUtils.getDB(data, local.conf)) {
+      assertThat(db.getStore().getBlockDataTable().get(data.getBlockKey(deletedBlock.getLocalID()))).isNull();
+      assertThat(db.getStore().getLastChunkInfoTable().get(data.getBlockKey(deletedBlock.getLocalID()))).isNull();
+      assertThat(db.getStore().getMetadataTable().get(data.getBlockCountKey())).isEqualTo(1L);
+      assertThat(db.getStore().getMetadataTable().get(data.getBytesUsedKey())).isEqualTo(expectedBytes);
+      assertThat(db.getStore().getMetadataTable().get(data.getPendingDeleteBlockCountKey())).isEqualTo(0L);
+    }
+  }
+
+  @Test
+  void testReconcileDeletionRetriesFileFailure() throws Exception {
+    long containerID = 103L;
+    MockDatanode local = datanodes.get(0);
+    local.addContainerWithBlocks(containerID, 2);
+    KeyValueContainer container = local.getContainer(containerID);
+    KeyValueContainerData data = container.getContainerData();
+    BlockData block = local.getSortedBlocks(container).get(0);
+    local.handler.getChecksumManager().addDeletedBlocks(data, Collections.singletonList(block));
+    File file = TestContainerCorruptions.getBlock(container, block.getLocalID());
+    long initialBytes = data.getBytesUsed();
+    try (MockedStatic<FileUtil> fileUtil = Mockito.mockStatic(FileUtil.class)) {
+      fileUtil.when(() -> FileUtil.fullyDelete(file)).thenReturn(false);
+      local.reconcileContainer(dnClient, Collections.emptyList(), containerID);
+      assertThat(file).exists();
+      assertThat(data.getBlockCount()).isEqualTo(2);
+      assertThat(data.getBytesUsed()).isEqualTo(initialBytes);
+      try (DBHandle db = BlockUtils.getDB(data, local.conf)) {
+        assertThat(db.getStore().getBlockDataTable().get(data.getBlockKey(block.getLocalID()))).isNotNull();
+      }
+    }
+    local.reconcileContainer(dnClient, Collections.emptyList(), containerID);
+    assertDeletedBlock(local, container, block, initialBytes - block.getSize());
+    local.awaitScan(containerID);
+  }
+
+  @Test
+  void testReconcileDeletionIncludesLastChunk() throws Exception {
+    long containerID = 104L;
+    MockDatanode local = datanodes.get(0);
+    local.addContainerWithBlocks(containerID, 2);
+    KeyValueContainer container = local.getContainer(containerID);
+    KeyValueContainerData data = container.getContainerData();
+    BlockData completeBlock = local.getSortedBlocks(container).get(0);
+    local.handler.getChecksumManager().addDeletedBlocks(data, Collections.singletonList(completeBlock));
+    long initialBytes = data.getBytesUsed();
+    try (DBHandle db = BlockUtils.getDB(data, local.conf)) {
+      BlockData partialBlock = new BlockData(completeBlock.getBlockID());
+      partialBlock.addMetadata(OzoneConsts.INCREMENTAL_CHUNK_LIST, "");
+      partialBlock.setChunks(completeBlock.getChunks().subList(0, CHUNKS_PER_BLOCK - 1));
+      BlockData lastChunk = new BlockData(completeBlock.getBlockID());
+      lastChunk.setChunks(Collections.singletonList(completeBlock.getChunks().get(CHUNKS_PER_BLOCK - 1)));
+      db.getStore().getBlockDataTable().put(data.getBlockKey(completeBlock.getLocalID()), partialBlock);
+      db.getStore().getLastChunkInfoTable().put(data.getBlockKey(completeBlock.getLocalID()), lastChunk);
+    }
+    local.reconcileContainer(dnClient, Collections.emptyList(), containerID);
+    assertDeletedBlock(local, container, completeBlock, initialBytes - completeBlock.getSize());
+    local.awaitScan(containerID);
+  }
 
   /**
    * Number of corrupt blocks and chunks.
@@ -569,6 +714,18 @@ public class TestContainerReconciliationWithMockDatanodes {
 
     public int getOnDemandScanCount() {
       return onDemandScanner.getMetrics().getNumContainersScanned();
+    }
+
+    private void awaitScan(long containerID) throws Exception {
+      // A scan requested by reconciliation may still be queued. Wait for it before queuing and awaiting our own scan.
+      GenericTestUtils.waitFor((CheckedSupplier<Boolean, Exception>) () -> {
+        Optional<Future<?>> scan = onDemandScanner.scanContainerWithoutGap(getContainer(containerID), TEST_SCAN);
+        if (!scan.isPresent()) {
+          return false;
+        }
+        scan.get().get();
+        return true;
+      }, 100, 10_000);
     }
 
     public void resetOnDemandScanCount() {

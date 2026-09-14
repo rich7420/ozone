@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -48,6 +49,7 @@ import org.apache.hadoop.hdfs.util.Canceler;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.ozone.container.checksum.ContainerChecksumTreeManager;
 import org.apache.hadoop.ozone.container.checksum.ContainerDiffReport;
+import org.apache.hadoop.ozone.container.checksum.ContainerMerkleTreeWriter;
 import org.apache.hadoop.ozone.container.common.helpers.BlockData;
 import org.apache.hadoop.ozone.container.common.impl.ContainerLayoutVersion;
 import org.apache.hadoop.ozone.container.common.interfaces.BlockIterator;
@@ -62,6 +64,8 @@ import org.apache.hadoop.ozone.container.ozoneimpl.DataScanResult;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,6 +84,58 @@ public class TestKeyValueContainerCheck
   private static Stream<ContainerTestVersionInfo> provideContainerVersions() {
     return ContainerTestVersionInfo.getLayoutList().stream()
         .filter(c -> c.getLayout() != ContainerLayoutVersion.FILE_PER_CHUNK);
+  }
+
+  @ParameterizedTest
+  @MethodSource("provideContainerVersions")
+  void testDeletedBlocksReadOncePerScan(ContainerTestVersionInfo versionInfo) throws Exception {
+    KeyValueContainer container = createContainerWithMissingBlocks(versionInfo);
+    KeyValueContainerData data = container.getContainerData();
+    ContainerMerkleTreeWriter tree = new ContainerMerkleTreeWriter();
+    for (long id = 0; id < 3; id++) {
+      tree.setDeletedBlock(id, id);
+    }
+    ContainerProtos.ContainerChecksumInfo deletedTree = ContainerProtos.ContainerChecksumInfo.newBuilder()
+        .setContainerID(data.getContainerID()).setContainerMerkleTree(tree.toProto()).build();
+    KeyValueContainerCheck check = new KeyValueContainerCheck(getConf(), container);
+    try (MockedStatic<ContainerChecksumTreeManager> reader = Mockito.mockStatic(ContainerChecksumTreeManager.class)) {
+      reader.when(() -> ContainerChecksumTreeManager.readChecksumInfo(data)).thenReturn(deletedTree);
+      assertThat(check.fullCheck(new DataTransferThrottler(Long.MAX_VALUE), null).hasErrors()).isFalse();
+      reader.verify(() -> ContainerChecksumTreeManager.readChecksumInfo(data), times(1));
+      // The cache belongs to a scan, not to the checker instance or container lifetime.
+      assertThat(check.fullCheck(new DataTransferThrottler(Long.MAX_VALUE), null).hasErrors()).isFalse();
+      reader.verify(() -> ContainerChecksumTreeManager.readChecksumInfo(data), times(2));
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource("provideContainerVersions")
+  void testDeletedBlocksRefreshOnCacheMiss(ContainerTestVersionInfo versionInfo) throws Exception {
+    KeyValueContainer container = createContainerWithMissingBlocks(versionInfo);
+    KeyValueContainerData data = container.getContainerData();
+    ContainerMerkleTreeWriter tree = new ContainerMerkleTreeWriter();
+    tree.setDeletedBlock(0, 0);
+    ContainerProtos.ContainerChecksumInfo initialTree = ContainerProtos.ContainerChecksumInfo.newBuilder()
+        .setContainerID(data.getContainerID()).setContainerMerkleTree(tree.toProto()).build();
+    tree.setDeletedBlock(1, 1);
+    tree.setDeletedBlock(2, 2);
+    ContainerProtos.ContainerChecksumInfo updatedTree = initialTree.toBuilder()
+        .setContainerMerkleTree(tree.toProto()).build();
+    try (MockedStatic<ContainerChecksumTreeManager> reader = Mockito.mockStatic(ContainerChecksumTreeManager.class)) {
+      reader.when(() -> ContainerChecksumTreeManager.readChecksumInfo(data)).thenReturn(initialTree, updatedTree);
+      KeyValueContainerCheck check = new KeyValueContainerCheck(getConf(), container);
+      assertThat(check.fullCheck(new DataTransferThrottler(Long.MAX_VALUE), null).hasErrors()).isFalse();
+      reader.verify(() -> ContainerChecksumTreeManager.readChecksumInfo(data), times(2));
+    }
+  }
+
+  private KeyValueContainer createContainerWithMissingBlocks(ContainerTestVersionInfo versionInfo) throws Exception {
+    initTestData(versionInfo);
+    KeyValueContainer container = createContainerWithBlocks(101, 3, 0, true);
+    for (long id = 0; id < 3; id++) {
+      MISSING_BLOCK.applyTo(container, id);
+    }
+    return container;
   }
 
   /**
