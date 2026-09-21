@@ -2599,6 +2599,7 @@ public class KeyValueHandler extends Handler {
             return;
           }
           containerLocked.markContainerForDelete();
+          containerSet.removeRecoveringContainer(containerId);
           containerSet.removeContainer(containerId);
           ContainerLogger.logDeleted(containerLocked.getContainerData(), force);
           KeyValueContainerUtil.removeContainer(keyValueContainerData, conf);
