@@ -40,6 +40,7 @@ import org.apache.hadoop.ozone.om.helpers.OmBucketInfo;
 import org.apache.hadoop.ozone.om.helpers.OmKeyInfo;
 import org.apache.hadoop.ozone.om.helpers.OmVolumeArgs;
 import org.apache.hadoop.ozone.recon.ReconUtils;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -51,10 +52,23 @@ public class TestReconOmMetadataManagerImpl {
   @TempDir
   private Path temporaryFolder;
 
+  private OMMetadataManager omMetadataManager;
+  private ReconOMMetadataManager reconOMMetadataManager;
+
+  @AfterEach
+  public void tearDown() throws Exception {
+    if (reconOMMetadataManager != null) {
+      reconOMMetadataManager.stop();
+    }
+    if (omMetadataManager != null) {
+      omMetadataManager.stop();
+    }
+  }
+
   @Test
   public void testStart() throws Exception {
 
-    OMMetadataManager omMetadataManager = getOMMetadataManager();
+    omMetadataManager = getOMMetadataManager();
 
     //Take checkpoint of the above OM DB.
     DBCheckpoint checkpoint = omMetadataManager.getStore()
@@ -72,8 +86,7 @@ public class TestReconOmMetadataManagerImpl {
         .getAbsolutePath());
     FileUtils.copyDirectory(snapshotFile.getParentFile(), reconOmDbDir);
 
-    ReconOMMetadataManager reconOMMetadataManager =
-        new ReconOmMetadataManagerImpl(configuration, new ReconUtils());
+    reconOMMetadataManager = new ReconOmMetadataManagerImpl(configuration, new ReconUtils());
     reconOMMetadataManager.start(configuration);
 
     assertNotNull(reconOMMetadataManager.getBucketTable());
@@ -90,7 +103,7 @@ public class TestReconOmMetadataManagerImpl {
   @Test
   public void testUpdateOmDB() throws Exception {
 
-    OMMetadataManager omMetadataManager = getOMMetadataManager();
+    omMetadataManager = getOMMetadataManager();
     //Make sure OM Metadata reflects the keys that were inserted.
     assertNotNull(omMetadataManager.getKeyTable(getBucketLayout())
         .get("/sampleVol/bucketOne/key_one"));
@@ -108,8 +121,7 @@ public class TestReconOmMetadataManagerImpl {
     OzoneConfiguration configuration = new OzoneConfiguration();
     configuration.set(OZONE_RECON_OM_SNAPSHOT_DB_DIR, reconOmDbDir
         .getAbsolutePath());
-    ReconOMMetadataManager reconOMMetadataManager =
-        new ReconOmMetadataManagerImpl(configuration, new ReconUtils());
+    reconOMMetadataManager = new ReconOmMetadataManagerImpl(configuration, new ReconUtils());
     reconOMMetadataManager.start(configuration);
 
     //Before accepting a snapshot, the metadata should have null tables.
@@ -158,8 +170,7 @@ public class TestReconOmMetadataManagerImpl {
     OzoneConfiguration omConfiguration = new OzoneConfiguration();
     omConfiguration.set(OZONE_OM_DB_DIRS,
         omDbDir.getAbsolutePath());
-    OMMetadataManager omMetadataManager = new OmMetadataManagerImpl(
-        omConfiguration, null);
+    omMetadataManager = new OmMetadataManagerImpl(omConfiguration, null);
 
     //Create a volume + bucket + 2 keys.
     String volumeKey = omMetadataManager.getVolumeKey("sampleVol");

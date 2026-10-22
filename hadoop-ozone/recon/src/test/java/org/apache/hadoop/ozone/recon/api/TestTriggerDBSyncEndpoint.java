@@ -67,6 +67,7 @@ import org.apache.hadoop.ozone.recon.tasks.updater.ReconTaskStatusUpdater;
 import org.apache.hadoop.ozone.recon.tasks.updater.ReconTaskStatusUpdaterManager;
 import org.apache.hadoop.security.authentication.client.AuthenticationException;
 import org.apache.ozone.recon.schema.generated.tables.daos.ReconTaskStatusDao;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -79,6 +80,8 @@ public class TestTriggerDBSyncEndpoint {
   @TempDir
   private Path temporaryFolder;
   private ReconTestInjector reconTestInjector;
+  private OMMetadataManager omMetadataManager;
+  private ReconOMMetadataManager reconOMMetadataManager;
 
   @BeforeEach
   public void setUp() throws IOException, AuthenticationException {
@@ -95,10 +98,10 @@ public class TestTriggerDBSyncEndpoint {
     when(ozoneManagerProtocol.getDBUpdates(any(OzoneManagerProtocolProtos
         .DBUpdatesRequest.class))).thenReturn(new DBUpdates());
 
-    OMMetadataManager omMetadataManager =
+    omMetadataManager =
         initializeNewOmMetadataManager(Files.createDirectory(
             temporaryFolder.resolve("OnMetadata")).toFile());
-    ReconOMMetadataManager reconOMMetadataManager
+    reconOMMetadataManager
         = getTestReconOmMetadataManager(omMetadataManager,
         Files.createDirectory(
             temporaryFolder.resolve("OmMetadataTest")).toFile());
@@ -149,6 +152,16 @@ public class TestTriggerDBSyncEndpoint {
             .addBinding(StorageContainerLocationInternalInterface.class,
                 mock(StorageContainerLocationInternalInterface.class))
             .build();
+  }
+
+  @AfterEach
+  public void tearDown() throws Exception {
+    if (reconOMMetadataManager != null) {
+      reconOMMetadataManager.stop();
+    }
+    if (omMetadataManager != null) {
+      omMetadataManager.stop();
+    }
   }
 
   @Test
