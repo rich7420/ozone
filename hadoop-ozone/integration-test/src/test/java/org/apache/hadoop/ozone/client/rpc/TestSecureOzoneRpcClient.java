@@ -20,6 +20,8 @@ package org.apache.hadoop.ozone.client.rpc;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.hadoop.hdds.HddsConfigKeys.OZONE_METADATA_DIRS;
 import static org.apache.hadoop.hdds.security.SecurityConfig.OZONE_TEST_AUTHORIZATION_ENABLED;
+import static org.apache.hadoop.ozone.OzoneAcl.AclScope.ACCESS;
+import static org.apache.hadoop.ozone.OzoneAcl.AclScope.DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConsts.FORCE_LEASE_RECOVERY_ENV;
 import static org.apache.hadoop.ozone.OzoneConsts.OZONE_OFS_URI_SCHEME;
 import static org.apache.hadoop.ozone.OzoneConsts.OZONE_ROOT;
@@ -27,7 +29,11 @@ import static org.apache.hadoop.ozone.OzoneConsts.OZONE_URI_DELIMITER;
 import static org.apache.hadoop.ozone.OzoneTestUtils.cleanupDeletedTable;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_ADDRESS_KEY;
 import static org.apache.hadoop.ozone.om.helpers.BucketLayout.FILE_SYSTEM_OPTIMIZED;
+import static org.apache.hadoop.ozone.security.acl.IAccessAuthorizer.ACLIdentityType.USER;
+import static org.apache.hadoop.ozone.security.acl.IAccessAuthorizer.ACLType.DELETE;
+import static org.apache.hadoop.ozone.security.acl.IAccessAuthorizer.ACLType.READ;
 import static org.apache.ozone.test.GenericTestUtils.getTestStartTime;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,6 +45,8 @@ import java.io.File;
 import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -64,6 +72,7 @@ import org.apache.hadoop.hdds.utils.db.cache.CacheValue;
 import org.apache.hadoop.ozone.ClientVersion;
 import org.apache.hadoop.ozone.DataTestUtil;
 import org.apache.hadoop.ozone.MiniOzoneCluster;
+import org.apache.hadoop.ozone.OzoneAcl;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.client.BucketArgs;
@@ -363,6 +372,47 @@ class TestSecureOzoneRpcClient extends OzoneRpcClientTests {
                 .forEach(
                     keyLocationInfo -> assertNull(keyLocationInfo
                         .getToken())));
+  }
+
+  @Test
+  void testS3DeleteKeysWithNativeAcls() throws Exception {
+    String allowedUser = "delete-allowed-" + UUID.randomUUID();
+    String deniedUser = "delete-denied-" + UUID.randomUUID();
+    String bucketName = UUID.randomUUID().toString();
+    S3SecretManager secrets = getCluster().getOzoneManager().getS3SecretManager();
+    secrets.storeSecret(allowedUser, S3SecretValue.of(allowedUser, S3_SECRET));
+    secrets.storeSecret(deniedUser, S3SecretValue.of(deniedUser, S3_SECRET));
+    getStore().createS3Bucket(bucketName);
+    OzoneVolume volume = getStore().getS3Volume();
+    volume.addAcl(OzoneAcl.of(USER, deniedUser, ACCESS, READ));
+    volume.addAcl(OzoneAcl.of(USER, allowedUser, ACCESS, READ));
+    OzoneBucket bucket = volume.getBucket(bucketName);
+    bucket.setAcl(Arrays.asList(OzoneAcl.of(USER, deniedUser, ACCESS, DELETE),
+        OzoneAcl.of(USER, allowedUser, ACCESS, READ), OzoneAcl.of(USER, allowedUser, DEFAULT, DELETE)));
+    bucket.createKey("key", 0).close();
+    ClientProtocol proxy = getStore().getClientProxy();
+    assertThat(getCluster().getOzoneManager().getAclsEnabled()).isTrue();
+    assertThat(getCluster().getOzoneManager().isAdmin(UserGroupInformation.createRemoteUser(allowedUser))).isFalse();
+
+    proxy.setThreadLocalS3Auth(new S3Auth(S3_STRING_TO_SIGN, S3_SIGNATURE, deniedUser, deniedUser));
+    try {
+      OMException denied = assertThrows(OMException.class,
+          () -> proxy.deleteS3Keys(bucketName, Arrays.asList("key", "missing-key")));
+      assertThat(denied.getResult()).isEqualTo(OMException.ResultCodes.PERMISSION_DENIED);
+      assertThat(denied.getMessage()).contains("READ").contains(bucketName);
+    } finally {
+      proxy.clearThreadLocalS3Auth();
+    }
+    assertThat(bucket.getKey("key")).isNotNull();
+
+    proxy.setThreadLocalS3Auth(new S3Auth(S3_STRING_TO_SIGN, S3_SIGNATURE, allowedUser, allowedUser));
+    try {
+      assertThat(proxy.deleteS3Keys(bucketName, Collections.singletonList("key"))).isEmpty();
+    } finally {
+      proxy.clearThreadLocalS3Auth();
+    }
+    OMException missing = assertThrows(OMException.class, () -> bucket.getKey("key"));
+    assertThat(missing.getResult()).isEqualTo(OMException.ResultCodes.KEY_NOT_FOUND);
   }
 
   @Test

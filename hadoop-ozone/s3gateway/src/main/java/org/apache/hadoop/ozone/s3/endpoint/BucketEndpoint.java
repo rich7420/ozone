@@ -386,7 +386,8 @@ public class BucketEndpoint extends BucketOperationHandler {
 
     final OzoneBucket bucket;
     try {
-      bucket = getVolume().getBucket(bucketName);
+      bucket = (request.getObjects() == null || S3Owner.hasBucketOwnershipVerificationConditions(getHeaders()))
+          ? getVolume().getBucket(bucketName) : null;
     } catch (OMException ex) {
       throw newError(bucketName, ex);
     } catch (IOException ex) {
@@ -403,8 +404,12 @@ public class BucketEndpoint extends BucketOperationHandler {
       }
       long startNanos = context.getStartNanos();
       try {
-        S3Owner.verifyBucketOwnerCondition(getHeaders(), bucketName, bucket.getOwner());
-        undeletedKeyResultMap = bucket.deleteKeys(deleteKeys, true);
+        if (bucket != null) {
+          S3Owner.verifyBucketOwnerCondition(getHeaders(), bucketName, bucket.getOwner());
+          undeletedKeyResultMap = bucket.deleteKeys(deleteKeys, true);
+        } else {
+          undeletedKeyResultMap = getClientProtocol().deleteS3Keys(bucketName, deleteKeys);
+        }
         for (DeleteObject d : request.getObjects()) {
           ErrorInfo error = undeletedKeyResultMap.get(d.getKey());
           boolean deleted = error == null ||
@@ -434,9 +439,8 @@ public class BucketEndpoint extends BucketOperationHandler {
           throw newError(bucketName, omEx);
         }
         LOG.error("Delete key failed: {}", ex.getMessage());
-        result.addError(
-            new Error("ALL", "InternalError",
-                ex.getMessage()));
+        auditMultiDeleteFailure(context, failedDeletes, ex);
+        throw newError(S3ErrorTable.INTERNAL_ERROR, bucketName, ex);
       }
     }
 

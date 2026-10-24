@@ -26,12 +26,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -40,6 +42,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -56,8 +59,11 @@ import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.OzoneManagerVersion;
 import org.apache.hadoop.ozone.client.MockOmTransport;
 import org.apache.hadoop.ozone.client.MockXceiverClientFactory;
+import org.apache.hadoop.ozone.client.OzoneBucket;
 import org.apache.hadoop.ozone.om.exceptions.OMException;
 import org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes;
+import org.apache.hadoop.ozone.om.helpers.ErrorInfo;
+import org.apache.hadoop.ozone.om.helpers.OmDeleteKeys;
 import org.apache.hadoop.ozone.om.helpers.OmKeyArgs;
 import org.apache.hadoop.ozone.om.helpers.OmVolumeArgs;
 import org.apache.hadoop.ozone.om.helpers.S3VolumeContext;
@@ -421,6 +427,40 @@ public class TestRpcClient {
       verify(client, times(assumeContext ? 0 : 1)).getS3VolumeContext();
       assertEquals(assumeContext ? "s3v" : "tenant-volume", args.getValue().getVolumeName());
       assertEquals("upload-id", args.getValue().getMultipartUploadID());
+    } finally {
+      client.close();
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = OzoneManagerVersion.class,
+      names = {"ZDU", "S3_VOLUME_CONTEXT_RESOLUTION", "S3_IF_NONE_MATCH_ETAG"})
+  void testDeleteS3Keys(OzoneManagerVersion version) throws Exception {
+    RpcClient client = spy(createRpcClient());
+    try {
+      OzoneManagerClientProtocol om = mock(OzoneManagerClientProtocol.class);
+      FieldUtils.writeField(client, "omVersion", version, true);
+      FieldUtils.writeField(client, "ozoneManagerClient", om, true);
+      doReturn(new S3VolumeContext(OmVolumeArgs.newBuilder().setVolume("tenant-volume")
+          .setOwnerName("owner").setAdminName("admin").build(), "owner")).when(client).getS3VolumeContext();
+      Map<String, ErrorInfo> errors = Collections.singletonMap("key2", new ErrorInfo("ACCESS_DENIED", "denied"));
+      when(om.deleteKeys(any(OmDeleteKeys.class), eq(true))).thenReturn(errors);
+      boolean assumeContext = OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION.isSupportedBy(version);
+      List<String> keys = Arrays.asList("key1", "key2");
+      OzoneBucket bucket = OzoneBucket.newBuilder(new OzoneConfiguration(), client)
+          .setVolumeName("tenant-volume").setName("bucket").build();
+      doReturn(bucket).when(client).getBucketDetails("tenant-volume", "bucket");
+
+      assertThat(client.deleteS3Keys("bucket", keys)).isSameAs(errors);
+
+      ArgumentCaptor<OmDeleteKeys> args = ArgumentCaptor.forClass(OmDeleteKeys.class);
+      verify(om).deleteKeys(args.capture(), eq(true));
+      verify(client, times(assumeContext ? 0 : 1)).getS3VolumeContext();
+      verify(client, times(assumeContext ? 0 : 1)).getBucketDetails("tenant-volume", "bucket");
+      assertThat(args.getValue().getVolume()).isEqualTo(assumeContext ? "s3v" : "tenant-volume");
+      assertThat(args.getValue().getBucket()).isEqualTo("bucket");
+      assertThat(args.getValue().getKeyNames()).containsExactlyElementsOf(keys);
+      assertThat(args.getValue().isAssumeS3Context()).isEqualTo(assumeContext);
     } finally {
       client.close();
     }

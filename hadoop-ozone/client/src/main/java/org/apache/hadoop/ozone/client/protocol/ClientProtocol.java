@@ -703,6 +703,15 @@ public interface ClientProtocol {
       throws IOException;
 
   /**
+   * Deletes S3 keys, resolving their volume on OM and returning per-key failures.
+   * @param bucketName Bucket name.
+   * @param keyNameList Keys to delete.
+   * @return Errors for keys that could not be deleted.
+   * @throws IOException
+   */
+  Map<String, ErrorInfo> deleteS3Keys(String bucketName, List<String> keyNameList) throws IOException;
+
+  /**
    * Renames an existing key within a bucket.
    * @param volumeName Name of the Volume
    * @param bucketName Name of the Bucket

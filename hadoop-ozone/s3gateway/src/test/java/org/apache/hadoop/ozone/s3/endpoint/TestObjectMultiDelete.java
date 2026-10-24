@@ -21,16 +21,21 @@ import static java.util.Arrays.asList;
 import static java.util.Collections.singleton;
 import static java.util.Collections.singletonMap;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.assertErrorResponse;
+import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.INTERNAL_ERROR;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.MALFORMED_XML;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.NOT_IMPLEMENTED;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.EXPECTED_BUCKET_OWNER_HEADER;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.NULL_VERSION_ID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.google.common.collect.Sets;
@@ -40,6 +45,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import javax.ws.rs.core.HttpHeaders;
 import javax.xml.bind.JAXBException;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.ozone.client.ObjectStore;
@@ -62,6 +68,57 @@ import org.junit.jupiter.api.Test;
  * Test object multi delete.
  */
 public class TestObjectMultiDelete {
+
+  @Test
+  public void multiDeleteSkipsVolumeAndBucketLookup() throws Exception {
+    OzoneBucket bucket = mock(OzoneBucket.class);
+    when(bucket.deleteKeys(any(), anyBoolean()))
+        .thenReturn(singletonMap("key2", new ErrorInfo("ACCESS_DENIED", "denied")));
+    BucketEndpoint endpoint = newEndpointFor(bucket, new HashMap<>());
+
+    MultiDeleteResponse response = endpoint.multiDelete("b1", "", threeKeyRequest());
+
+    verify(endpoint.getClient().getObjectStore(), never()).getS3Volume();
+    verify(endpoint.getClient().getObjectStore().getClientProxy()).deleteS3Keys("b1", asList("key1", "key2", "key3"));
+    assertThat(response.getErrors()).hasSize(1);
+    assertThat(response.getDeletedObjects()).extracting(DeletedObject::getKey).containsExactly("key1", "key3");
+  }
+
+  @Test
+  public void multiDeleteRejectsWrongExpectedOwnerBeforeDeleting() throws Exception {
+    OzoneBucket bucket = mock(OzoneBucket.class);
+    when(bucket.getOwner()).thenReturn("owner");
+    BucketEndpoint original = newEndpointFor(bucket, new HashMap<>());
+    HttpHeaders headers = mock(HttpHeaders.class);
+    when(headers.getHeaderString(EXPECTED_BUCKET_OWNER_HEADER)).thenReturn("other-owner");
+    BucketEndpoint endpoint = EndpointBuilder.newBucketEndpointBuilder()
+        .setClient(original.getClient()).setHeaders(headers).build();
+
+    OS3Exception exception = assertThrows(OS3Exception.class,
+        () -> endpoint.multiDelete("b1", "", threeKeyRequest()));
+    assertThat(exception.getHttpCode()).isEqualTo(403);
+
+    verify(bucket, never()).deleteKeys(any(), anyBoolean());
+    verify(endpoint.getClient().getObjectStore().getClientProxy(), never()).deleteS3Keys(anyString(), any());
+  }
+
+  @Test
+  public void multiDeleteRetainsExpectedOwnerCheck() throws Exception {
+    OzoneBucket bucket = mock(OzoneBucket.class);
+    when(bucket.getOwner()).thenReturn("owner");
+    when(bucket.deleteKeys(any(), anyBoolean())).thenReturn(new HashMap<>());
+    BucketEndpoint original = newEndpointFor(bucket, new HashMap<>());
+    HttpHeaders headers = mock(HttpHeaders.class);
+    when(headers.getHeaderString(EXPECTED_BUCKET_OWNER_HEADER)).thenReturn("owner");
+    BucketEndpoint endpoint = EndpointBuilder.newBucketEndpointBuilder()
+        .setClient(original.getClient()).setHeaders(headers).build();
+
+    assertThat(endpoint.multiDelete("b1", "", threeKeyRequest()).getDeletedObjects()).hasSize(3);
+
+    verify(bucket).deleteKeys(asList("key1", "key2", "key3"), true);
+    verify(endpoint.getClient().getObjectStore()).getS3Volume();
+    verify(endpoint.getClient().getObjectStore().getClientProxy(), never()).deleteS3Keys(anyString(), any());
+  }
 
   @Test
   public void delete() throws IOException, OS3Exception, JAXBException {
@@ -187,13 +244,9 @@ public class TestObjectMultiDelete {
     when(bucket.deleteKeys(any(), anyBoolean())).thenThrow(new IOException("Ozone Manager is unavailable"));
 
     Map<String, String> auditParams = new HashMap<>();
-    MultiDeleteResponse response =
-        newEndpointFor(bucket, auditParams).multiDelete("b1", "", threeKeyRequest());
+    BucketEndpoint endpoint = newEndpointFor(bucket, auditParams);
 
-    assertEquals(0, response.getDeletedObjects().size());
-    assertEquals(1, response.getErrors().size());
-    assertEquals("ALL", response.getErrors().get(0).getKey());
-    assertEquals("InternalError", response.getErrors().get(0).getCode());
+    assertErrorResponse(INTERNAL_ERROR, () -> endpoint.multiDelete("b1", "", threeKeyRequest()));
     assertEquals("[key1, key2, key3]", auditParams.get("failedDeletes"));
   }
 
@@ -277,7 +330,11 @@ public class TestObjectMultiDelete {
     OzoneVolume volume = mock(OzoneVolume.class);
     when(client.getObjectStore()).thenReturn(objectStore);
     when(client.getConfiguration()).thenReturn(conf);
-    when(objectStore.getClientProxy()).thenReturn(mock(ClientProtocol.class));
+    ClientProtocol protocol = mock(ClientProtocol.class);
+    when(client.getProxy()).thenReturn(protocol);
+    when(objectStore.getClientProxy()).thenReturn(protocol);
+    when(protocol.deleteS3Keys(anyString(), any()))
+        .thenAnswer(invocation -> bucket.deleteKeys(invocation.getArgument(1), true));
     when(objectStore.getS3Volume()).thenReturn(volume);
     when(volume.getBucket(anyString())).thenReturn(bucket);
 

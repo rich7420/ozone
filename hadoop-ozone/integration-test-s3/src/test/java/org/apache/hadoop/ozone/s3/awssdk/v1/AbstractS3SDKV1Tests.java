@@ -53,6 +53,8 @@ import com.amazonaws.services.s3.model.CopyPartRequest;
 import com.amazonaws.services.s3.model.CopyPartResult;
 import com.amazonaws.services.s3.model.CreateBucketRequest;
 import com.amazonaws.services.s3.model.DeleteBucketTaggingConfigurationRequest;
+import com.amazonaws.services.s3.model.DeleteObjectsRequest;
+import com.amazonaws.services.s3.model.DeleteObjectsResult;
 import com.amazonaws.services.s3.model.GeneratePresignedUrlRequest;
 import com.amazonaws.services.s3.model.GetBucketAccelerateConfigurationRequest;
 import com.amazonaws.services.s3.model.GetBucketLifecycleConfigurationRequest;
@@ -252,6 +254,20 @@ public abstract class AbstractS3SDKV1Tests extends OzoneTestBase implements NonH
     cluster = cluster();
     s3Client = new S3ClientFactory(cluster.getConf())
         .createS3Client();
+  }
+
+  @Test
+  public void testMultiDeleteWithMissingKey() {
+    String bucketName = getBucketName();
+    String keyName = getKeyName();
+    s3Client.createBucket(bucketName);
+    s3Client.putObject(bucketName, keyName, "content");
+
+    DeleteObjectsResult result = s3Client.deleteObjects(new DeleteObjectsRequest(bucketName)
+        .withKeys(keyName, "missing-key").withQuiet(false));
+
+    assertThat(result.getDeletedObjects()).hasSize(2);
+    assertThat(s3Client.listObjects(bucketName).getObjectSummaries()).isEmpty();
   }
 
   @Test

@@ -1845,6 +1845,19 @@ public class RpcClient implements ClientProtocol {
   }
 
   @Override
+  public Map<String, ErrorInfo> deleteS3Keys(String bucketName, List<String> keyNameList) throws IOException {
+    if (!OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION.isSupportedBy(omVersion)) {
+      return getBucketDetails(getS3VolumeContext().getOmVolumeArgs().getVolume(), bucketName)
+          .deleteKeys(keyNameList, true);
+    }
+    verifyBucketName(bucketName);
+    Objects.requireNonNull(keyNameList, "keyNameList == null");
+    OmDeleteKeys deleteKeys = new OmDeleteKeys(OzoneConfigKeys.OZONE_S3_VOLUME_NAME_DEFAULT,
+        bucketName, keyNameList, true);
+    return ozoneManagerClient.deleteKeys(deleteKeys, true);
+  }
+
+  @Override
   public void deleteKeys(
           String volumeName, String bucketName, List<String> keyNameList)
           throws IOException {

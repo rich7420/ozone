@@ -275,6 +275,21 @@ public abstract class AbstractS3SDKV2Tests extends OzoneTestBase implements NonH
     }
   }
 
+  @Test
+  public void testMultiDeleteWithMissingKey() {
+    String bucketName = getBucketName();
+    String keyName = getKeyName();
+    s3Client.createBucket(b -> b.bucket(bucketName));
+    s3Client.putObject(b -> b.bucket(bucketName).key(keyName), RequestBody.fromString("content"));
+
+    DeleteObjectsResponse result = s3Client.deleteObjects(b -> b.bucket(bucketName).delete(d -> d.objects(
+        ObjectIdentifier.builder().key(keyName).build(), ObjectIdentifier.builder().key("missing-key").build())));
+
+    assertThat(result.errors()).isEmpty();
+    assertThat(result.deleted()).hasSize(2);
+    assertThat(s3Client.listObjects(b -> b.bucket(bucketName)).contents()).isEmpty();
+  }
+
   /**
    * s3-tests: test_bucket_create_exists.
    */

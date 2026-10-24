@@ -400,6 +400,11 @@ public class ClientProtocolStub implements ClientProtocol {
   }
 
   @Override
+  public Map<String, ErrorInfo> deleteS3Keys(String bucketName, List<String> keyNameList) throws IOException {
+    return objectStoreStub.getS3Bucket(bucketName).deleteKeys(keyNameList, true);
+  }
+
+  @Override
   public void deleteKeys(String volumeName, String bucketName,
                          List<String> keyNameList) throws IOException {
 
