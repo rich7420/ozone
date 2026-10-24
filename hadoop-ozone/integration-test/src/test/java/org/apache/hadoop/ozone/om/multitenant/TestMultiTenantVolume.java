@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.google.protobuf.ServiceException;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import org.apache.hadoop.hdds.client.OzoneQuota;
@@ -162,6 +163,8 @@ public class TestMultiTenantVolume {
     assertEquals(s3VolumeName,
         store.getS3Bucket(bucketName).getVolumeName());
 
+    assertS3TagDeletion(store, store.getS3Bucket(bucketName), bucketName);
+
     // Delete bucket.
     store.deleteS3Bucket(bucketName);
     assertS3BucketNotFound(store, bucketName);
@@ -182,6 +185,7 @@ public class TestMultiTenantVolume {
     store.createS3Bucket(BUCKET_NAME);
     OzoneBucket bucket = store.getS3Bucket(BUCKET_NAME);
     assertEquals(TENANT_ID, bucket.getVolumeName());
+    assertS3TagDeletion(store, bucket, BUCKET_NAME);
 
     // A different user should not see bucket, since they will be directed to
     // the s3 volume.
@@ -211,6 +215,8 @@ public class TestMultiTenantVolume {
     exception = assertThrows(OMException.class, () -> sourceBucket.abortMultipartUpload(keyName, linkUploadID));
     assertEquals(OMException.ResultCodes.NO_SUCH_MULTIPART_UPLOAD_ERROR, exception.getResult());
 
+    assertS3TagDeletion(store, sourceBucket, linkBucketName);
+
     store.deleteS3Bucket(linkBucketName);
     sourceVolume.deleteBucket(sourceBucketName);
     store.deleteVolume(sourceVolumeName);
@@ -222,6 +228,17 @@ public class TestMultiTenantVolume {
     store.tenantRevokeUserAccessId(ACCESS_ID);
     store.deleteTenant(TENANT_ID);
     store.deleteVolume(TENANT_ID);
+  }
+
+  private void assertS3TagDeletion(ObjectStore store, OzoneBucket bucket, String s3BucketName) throws Exception {
+    String keyName = "delete-tagging-key";
+    bucket.createKey(keyName, 0).close();
+    bucket.putObjectTagging(keyName, Collections.singletonMap("tag", "value"));
+
+    store.getClientProxy().deleteS3ObjectTagging(s3BucketName, keyName);
+
+    assertThat(bucket.getKey(keyName).getTags()).isEmpty();
+    bucket.deleteKey(keyName);
   }
 
   /**

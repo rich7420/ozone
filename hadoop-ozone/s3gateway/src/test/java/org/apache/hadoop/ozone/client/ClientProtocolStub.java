@@ -1032,6 +1032,11 @@ public class ClientProtocolStub implements ClientProtocol {
   }
 
   @Override
+  public void deleteS3ObjectTagging(String bucketName, String keyName) throws IOException {
+    objectStoreStub.getS3Bucket(bucketName).deleteObjectTagging(keyName);
+  }
+
+  @Override
   public void deleteObjectTagging(String volumeName, String bucketName, String keyName) throws IOException {
     getBucket(volumeName, bucketName).deleteObjectTagging(keyName);
   }

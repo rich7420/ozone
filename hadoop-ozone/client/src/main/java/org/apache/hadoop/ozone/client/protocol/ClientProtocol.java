@@ -1766,6 +1766,14 @@ public interface ClientProtocol {
       throws IOException;
 
   /**
+   * Removes all tags from an S3 key, resolving its volume on OM.
+   * @param bucketName Bucket name.
+   * @param keyName Key name.
+   * @throws IOException
+   */
+  void deleteS3ObjectTagging(String bucketName, String keyName) throws IOException;
+
+  /**
    * Process the AssumeRole operation.
    *
    * @param roleArn                 The ARN of the role to assume

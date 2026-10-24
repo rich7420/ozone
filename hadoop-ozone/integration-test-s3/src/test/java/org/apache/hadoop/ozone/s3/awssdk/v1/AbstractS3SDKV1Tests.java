@@ -53,6 +53,7 @@ import com.amazonaws.services.s3.model.CopyPartRequest;
 import com.amazonaws.services.s3.model.CopyPartResult;
 import com.amazonaws.services.s3.model.CreateBucketRequest;
 import com.amazonaws.services.s3.model.DeleteBucketTaggingConfigurationRequest;
+import com.amazonaws.services.s3.model.DeleteObjectTaggingRequest;
 import com.amazonaws.services.s3.model.GeneratePresignedUrlRequest;
 import com.amazonaws.services.s3.model.GetBucketAccelerateConfigurationRequest;
 import com.amazonaws.services.s3.model.GetBucketLifecycleConfigurationRequest;
@@ -252,6 +253,21 @@ public abstract class AbstractS3SDKV1Tests extends OzoneTestBase implements NonH
     cluster = cluster();
     s3Client = new S3ClientFactory(cluster.getConf())
         .createS3Client();
+  }
+
+  @Test
+  public void testDeleteObjectTaggingPreservesObject() {
+    String bucketName = getBucketName();
+    String keyName = getKeyName();
+    s3Client.createBucket(bucketName);
+    s3Client.putObject(bucketName, keyName, "content");
+    s3Client.setObjectTagging(new SetObjectTaggingRequest(bucketName, keyName,
+        new ObjectTagging(Collections.singletonList(new Tag("tag", "value")))));
+
+    s3Client.deleteObjectTagging(new DeleteObjectTaggingRequest(bucketName, keyName));
+
+    assertThat(s3Client.getObjectTagging(new GetObjectTaggingRequest(bucketName, keyName)).getTagSet()).isEmpty();
+    assertThat(s3Client.getObjectAsString(bucketName, keyName)).isEqualTo("content");
   }
 
   @Test

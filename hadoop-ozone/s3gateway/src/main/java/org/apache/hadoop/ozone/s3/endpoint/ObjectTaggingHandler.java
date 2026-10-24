@@ -82,7 +82,11 @@ class ObjectTaggingHandler extends ObjectOperationHandler {
     }
     try {
       rejectVersionId(keyName);
-      getClientProtocol().deleteObjectTagging(context.getVolume().getName(), context.getBucketName(), keyName);
+      if (S3Owner.hasBucketOwnershipVerificationConditions(getHeaders())) {
+        getClientProtocol().deleteObjectTagging(context.getVolume().getName(), context.getBucketName(), keyName);
+      } else {
+        getClientProtocol().deleteS3ObjectTagging(context.getBucketName(), keyName);
+      }
       getMetrics().updateDeleteObjectTaggingSuccessStats(context.getStartNanos());
       return Response.noContent().build();
     } catch (OMException ex) {

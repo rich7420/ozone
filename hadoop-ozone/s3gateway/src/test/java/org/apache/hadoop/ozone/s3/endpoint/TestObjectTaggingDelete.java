@@ -25,6 +25,7 @@ import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.put;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.NOT_IMPLEMENTED;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.NO_SUCH_BUCKET;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.NO_SUCH_KEY;
+import static org.apache.hadoop.ozone.s3.util.S3Consts.EXPECTED_BUCKET_OWNER_HEADER;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.NULL_VERSION_ID;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.TAG_HEADER;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_CONTENT_SHA256;
@@ -86,16 +87,36 @@ public class TestObjectTaggingDelete {
   }
 
   @Test
-  public void testDeleteTaggingWithoutBucketLookup() throws Exception {
+  public void testDeleteTaggingWithoutVolumeOrBucketLookup() throws Exception {
     OzoneVolume volume = mock(OzoneVolume.class);
     ClientProtocol protocol = mock(ClientProtocol.class);
     ObjectEndpoint endpoint = createObjectEndpoint(protocol, volume, BUCKET_NAME);
 
     deleteTagging(endpoint, BUCKET_NAME, KEY_WITH_TAG);
 
+    verify(endpoint.getClient().getObjectStore(), never()).getS3Volume();
+    verify(protocol, never()).getS3VolumeContext();
     verify(volume, never()).getBucket(anyString());
     verify(protocol, never()).getBucketDetails(anyString(), anyString());
+    verify(protocol).deleteS3ObjectTagging(BUCKET_NAME, KEY_WITH_TAG);
+  }
+
+  @Test
+  public void testDeleteTaggingReusesVolumeForExpectedOwner() throws Exception {
+    OzoneVolume volume = mock(OzoneVolume.class);
+    ClientProtocol protocol = mock(ClientProtocol.class);
+    ObjectEndpoint original = createObjectEndpoint(protocol, volume, BUCKET_NAME);
+    when(volume.getBucket(BUCKET_NAME).getOwner()).thenReturn("owner");
+    HttpHeaders headers = mock(HttpHeaders.class);
+    when(headers.getHeaderString(EXPECTED_BUCKET_OWNER_HEADER)).thenReturn("owner");
+    ObjectEndpoint endpoint = EndpointBuilder.newObjectEndpointBuilder()
+        .setClient(original.getClient()).setHeaders(headers).build();
+
+    assertEquals(HTTP_NO_CONTENT, deleteTagging(endpoint, BUCKET_NAME, KEY_WITH_TAG).getStatus());
+
+    verify(endpoint.getClient().getObjectStore()).getS3Volume();
     verify(protocol).deleteObjectTagging("s3Volume", BUCKET_NAME, KEY_WITH_TAG);
+    verify(protocol, never()).deleteS3ObjectTagging(anyString(), anyString());
   }
 
   @Test
@@ -152,7 +173,7 @@ public class TestObjectTaggingDelete {
         .setClient(mockClient)
         .build();
     doThrow(new OMException("DeleteObjectTagging is not currently supported for FSO directory",
-        ResultCodes.NOT_SUPPORTED_OPERATION)).when(protocol).deleteObjectTagging("s3Volume", "fsoBucket", "dir/");
+        ResultCodes.NOT_SUPPORTED_OPERATION)).when(protocol).deleteS3ObjectTagging("fsoBucket", "dir/");
 
     assertErrorResponse(NOT_IMPLEMENTED, () -> deleteTagging(endpoint, "fsoBucket", "dir/"));
   }
