@@ -276,6 +276,19 @@ public abstract class AbstractS3SDKV2Tests extends OzoneTestBase implements NonH
     }
   }
 
+  @Test
+  public void testDeleteObjectTaggingPreservesObject() {
+    String bucketName = getBucketName();
+    String keyName = getKeyName();
+    s3Client.createBucket(b -> b.bucket(bucketName));
+    s3Client.putObject(b -> b.bucket(bucketName).key(keyName).tagging("tag=value"), RequestBody.fromString("content"));
+
+    s3Client.deleteObjectTagging(b -> b.bucket(bucketName).key(keyName));
+
+    assertThat(s3Client.getObjectTagging(b -> b.bucket(bucketName).key(keyName)).tagSet()).isEmpty();
+    assertThat(s3Client.getObjectAsBytes(b -> b.bucket(bucketName).key(keyName)).asUtf8String()).isEqualTo("content");
+  }
+
   /**
    * s3-tests: test_bucket_create_exists.
    */

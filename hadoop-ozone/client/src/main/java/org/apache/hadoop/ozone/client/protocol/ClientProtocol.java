@@ -1757,7 +1757,7 @@ public interface ClientProtocol {
 
   /**
    * Removes all the tags from the specified key.
-   * @param volumeName Volume name.
+   * @param volumeName Volume name. S3 clients may pass null to resolve it from their S3 context.
    * @param bucketName Bucket name.
    * @param keyName Key name.
    * @throws IOException

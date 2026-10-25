@@ -524,6 +524,64 @@ public class TestRpcClient {
   }
 
   @ParameterizedTest
+  @EnumSource(value = OzoneManagerVersion.class,
+      names = {"S3_VOLUME_CONTEXT_RESOLUTION", "S3_IF_NONE_MATCH_ETAG"})
+  void testDeleteObjectTaggingWithS3Context(OzoneManagerVersion version) throws Exception {
+    RpcClient client = createRpcClient(version, true);
+    try {
+      OzoneManagerClientProtocol om = mock(OzoneManagerClientProtocol.class);
+      FieldUtils.writeField(client, "ozoneManagerClient", om, true);
+
+      client.deleteObjectTagging(null, "bucket", "key");
+
+      ArgumentCaptor<OmKeyArgs> args = ArgumentCaptor.forClass(OmKeyArgs.class);
+      verify(om).deleteObjectTagging(args.capture());
+      assertThat(args.getValue().getVolumeName()).isEqualTo("s3v");
+      assertThat(args.getValue().getBucketName()).isEqualTo("bucket");
+      assertThat(args.getValue().getKeyName()).isEqualTo("key");
+      assertThat(args.getValue().isAssumeS3Context()).isTrue();
+    } finally {
+      client.close();
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, s3v", "true, s3v", "false, tenant-volume", "true, tenant-volume"})
+  void testDeleteObjectTaggingPreservesExplicitVolume(boolean s3Client, String volumeName) throws Exception {
+    RpcClient client = createRpcClient(OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION, s3Client);
+    try {
+      OzoneManagerClientProtocol om = mock(OzoneManagerClientProtocol.class);
+      FieldUtils.writeField(client, "ozoneManagerClient", om, true);
+
+      client.deleteObjectTagging(volumeName, "bucket", "key");
+
+      ArgumentCaptor<OmKeyArgs> args = ArgumentCaptor.forClass(OmKeyArgs.class);
+      verify(om).deleteObjectTagging(args.capture());
+      assertThat(args.getValue().getVolumeName()).isEqualTo(volumeName);
+      assertThat(args.getValue().isAssumeS3Context()).isFalse();
+    } finally {
+      client.close();
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, S3_VOLUME_CONTEXT_RESOLUTION", "true, ZDU", "true, S3_OBJECT_TAGGING_API"})
+  void testDeleteObjectTaggingRejectsUnsupportedS3Context(boolean s3Client, OzoneManagerVersion version)
+      throws Exception {
+    RpcClient client = createRpcClient(version, s3Client);
+    try {
+      OzoneManagerClientProtocol om = mock(OzoneManagerClientProtocol.class);
+      FieldUtils.writeField(client, "ozoneManagerClient", om, true);
+
+      assertThrows(NullPointerException.class, () -> client.deleteObjectTagging(null, "bucket", "key"));
+
+      verifyNoInteractions(om);
+    } finally {
+      client.close();
+    }
+  }
+
+  @ParameterizedTest
   @EnumSource(value = OzoneManagerVersion.class, mode = EnumSource.Mode.EXCLUDE, names = "UNKNOWN_VERSION")
   public void testCreateKeyIfNotExistsRequiresSupportedOmVersion(OzoneManagerVersion version) throws IOException {
     checkCreateKeyIfNotExistsOmVersion(version, false);

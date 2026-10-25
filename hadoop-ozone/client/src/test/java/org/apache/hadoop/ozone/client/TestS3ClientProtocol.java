@@ -52,6 +52,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedConstruction;
@@ -99,6 +100,31 @@ class TestS3ClientProtocol {
     versionedClient.deleteKey(volume, "bucket", "key", true, "etag");
 
     verify(delegate).deleteKey(volume, "bucket", "key", true, "etag");
+    verify(delegate, never()).getS3VolumeContext();
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = OzoneManagerVersion.class,
+      names = {"S3_OBJECT_TAGGING_API", "ZDU", "S3_VOLUME_CONTEXT_RESOLUTION", "S3_IF_NONE_MATCH_ETAG"})
+  void resolvesTaggingVolumeForOlderOm(OzoneManagerVersion version) throws Exception {
+    when(delegate.getS3VolumeContext()).thenReturn(volumeContext("tenant-volume"));
+    ClientProtocol versionedClient = createClient(version);
+
+    versionedClient.deleteObjectTagging(null, "bucket", "key");
+
+    boolean resolveOnOm = OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION.isSupportedBy(version);
+    verify(delegate).deleteObjectTagging(resolveOnOm ? null : "tenant-volume", "bucket", "key");
+    verify(delegate, times(resolveOnOm ? 0 : 1)).getS3VolumeContext();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"s3v", "tenant-volume"})
+  void preservesExplicitTaggingVolume(String volume) throws Exception {
+    ClientProtocol versionedClient = createClient(OzoneManagerVersion.ZDU);
+
+    versionedClient.deleteObjectTagging(volume, "bucket", "key");
+
+    verify(delegate).deleteObjectTagging(volume, "bucket", "key");
     verify(delegate, never()).getS3VolumeContext();
   }
 
