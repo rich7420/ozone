@@ -39,12 +39,16 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.ozone.OzoneManagerVersion;
 import org.apache.hadoop.ozone.client.protocol.ClientProtocol;
 import org.apache.hadoop.ozone.client.rpc.RpcClient;
 import org.apache.hadoop.ozone.om.exceptions.OMException;
+import org.apache.hadoop.ozone.om.helpers.ErrorInfo;
 import org.apache.hadoop.ozone.om.helpers.OmVolumeArgs;
 import org.apache.hadoop.ozone.om.helpers.S3VolumeContext;
 import org.apache.hadoop.ozone.om.protocol.S3Auth;
@@ -52,6 +56,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedConstruction;
@@ -133,6 +138,99 @@ class TestS3ClientProtocol {
     assertThat(assertThrows(IOException.class, () -> versionedClient.deleteKey(null, "bucket", "key", false)))
         .isSameAs(failure);
     verify(delegate, never()).deleteKey(any(), anyString(), anyString(), anyBoolean());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"ZDU, false", "ZDU, true", "S3_VOLUME_CONTEXT_RESOLUTION, false",
+      "S3_VOLUME_CONTEXT_RESOLUTION, true", "S3_IF_NONE_MATCH_ETAG, false", "S3_IF_NONE_MATCH_ETAG, true"})
+  void resolvesBatchVolumeForOlderOm(OzoneManagerVersion version, boolean quiet) throws Exception {
+    List<String> keys = Collections.singletonList("key");
+    Map<String, ErrorInfo> errors = Collections.singletonMap("key", new ErrorInfo("ACCESS_DENIED", "denied"));
+    OzoneBucket bucket = mock(OzoneBucket.class);
+    when(delegate.getS3VolumeContext()).thenReturn(volumeContext("tenant-volume"));
+    when(delegate.getBucketDetails("tenant-volume", "bucket")).thenReturn(bucket);
+    when(delegate.deleteKeys(null, "bucket", keys, quiet)).thenReturn(errors);
+    when(bucket.deleteKeys(keys, quiet)).thenReturn(errors);
+    ClientProtocol versionedClient = createClient(version);
+
+    assertThat(versionedClient.deleteKeys(null, "bucket", keys, quiet)).isSameAs(errors);
+
+    boolean resolveOnOm = OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION.isSupportedBy(version);
+    if (resolveOnOm) {
+      verify(delegate).deleteKeys(null, "bucket", keys, quiet);
+      verify(delegate, never()).getBucketDetails(any(), anyString());
+    } else {
+      verify(delegate).getBucketDetails("tenant-volume", "bucket");
+      verify(bucket).deleteKeys(keys, quiet);
+      verify(delegate, never()).deleteKeys(any(), anyString(), any(), anyBoolean());
+    }
+    verify(delegate, times(resolveOnOm ? 0 : 1)).getS3VolumeContext();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"s3v, false", "s3v, true", "tenant-volume, false", "tenant-volume, true"})
+  void preservesExplicitBatchVolume(String volume, boolean quiet) throws Exception {
+    List<String> keys = Collections.singletonList("key");
+    ClientProtocol versionedClient = createClient(OzoneManagerVersion.ZDU);
+
+    versionedClient.deleteKeys(volume, "bucket", keys, quiet);
+
+    verify(delegate).deleteKeys(volume, "bucket", keys, quiet);
+    verify(delegate, never()).getS3VolumeContext();
+    verify(delegate, never()).getBucketDetails(anyString(), anyString());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void doesNotDeleteWhenBatchBucketLookupFails(boolean permissionDenied) throws Exception {
+    IOException failure = permissionDenied ? new OMException("Denied", OMException.ResultCodes.PERMISSION_DENIED)
+        : new IOException("Bucket lookup failed");
+    when(delegate.getS3VolumeContext()).thenReturn(volumeContext("tenant-volume"));
+    when(delegate.getBucketDetails("tenant-volume", "bucket")).thenThrow(failure);
+    ClientProtocol versionedClient = createClient(OzoneManagerVersion.ZDU);
+
+    assertThat(assertThrows(IOException.class,
+        () -> versionedClient.deleteKeys(null, "bucket", Collections.singletonList("key"), true))).isSameAs(failure);
+
+    verify(delegate, never()).deleteKeys(any(), anyString(), any(), anyBoolean());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void propagatesBatchDeleteFailure(boolean oldOm) throws Exception {
+    List<String> keys = Collections.singletonList("key");
+    IOException failure = new IOException("Delete failed");
+    ClientProtocol versionedClient = createClient(oldOm ? OzoneManagerVersion.ZDU
+        : OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION);
+    if (oldOm) {
+      OzoneBucket bucket = mock(OzoneBucket.class);
+      when(delegate.getS3VolumeContext()).thenReturn(volumeContext("tenant-volume"));
+      when(delegate.getBucketDetails("tenant-volume", "bucket")).thenReturn(bucket);
+      when(bucket.deleteKeys(keys, true)).thenThrow(failure);
+    } else {
+      when(delegate.deleteKeys(null, "bucket", keys, true)).thenThrow(failure);
+    }
+
+    assertThat(assertThrows(IOException.class,
+        () -> versionedClient.deleteKeys(null, "bucket", keys, true))).isSameAs(failure);
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = OzoneManagerVersion.class, names = {"ZDU", "S3_VOLUME_CONTEXT_RESOLUTION"})
+  void forwardsEmptyBatch(OzoneManagerVersion version) throws Exception {
+    List<String> keys = Collections.emptyList();
+    OzoneBucket bucket = mock(OzoneBucket.class);
+    when(delegate.getS3VolumeContext()).thenReturn(volumeContext("tenant-volume"));
+    when(delegate.getBucketDetails("tenant-volume", "bucket")).thenReturn(bucket);
+    ClientProtocol versionedClient = createClient(version);
+
+    versionedClient.deleteKeys(null, "bucket", keys, true);
+
+    if (OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION.isSupportedBy(version)) {
+      verify(delegate).deleteKeys(null, "bucket", keys, true);
+    } else {
+      verify(bucket).deleteKeys(keys, true);
+    }
   }
 
   @ParameterizedTest(name = "{0} [reverseBooleans={1}]")

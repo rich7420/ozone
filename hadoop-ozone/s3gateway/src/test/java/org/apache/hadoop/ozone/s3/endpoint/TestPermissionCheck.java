@@ -187,12 +187,9 @@ public class TestPermissionCheck {
 
   @Test
   public void testDeleteKeys() throws IOException, OS3Exception {
-    when(objectStore.getVolume(anyString())).thenReturn(volume);
-    when(objectStore.getS3Volume()).thenReturn(volume);
-    when(volume.getBucket(anyString())).thenReturn(bucket);
     final Map<String, ErrorInfo> deleteErrors = Collections.singletonMap(
         "deleteKeyName", new ErrorInfo("ACCESS_DENIED", "ACL check failed"));
-    when(bucket.deleteKeys(any(), anyBoolean())).thenReturn(deleteErrors);
+    when(clientProtocol.deleteKeys(isNull(), anyString(), any(), eq(true))).thenReturn(deleteErrors);
 
     final BucketEndpoint bucketEndpoint = EndpointBuilder.newBucketEndpointBuilder()
         .setClient(client)
@@ -208,11 +205,8 @@ public class TestPermissionCheck {
   @MethodSource("deleteKeysTranslatedOMFailures")
   public void testDeleteKeysTranslatesContainedOMFailures(ResultCodes resultCode, S3ErrorTable expectedError)
       throws IOException {
-    when(objectStore.getVolume(anyString())).thenReturn(volume);
-    when(objectStore.getS3Volume()).thenReturn(volume);
-    when(volume.getBucket(anyString())).thenReturn(bucket);
     doThrow(new IOException("DeleteObjects failed", new OMException("OM failure", resultCode)))
-        .when(bucket).deleteKeys(any(), anyBoolean());
+        .when(clientProtocol).deleteKeys(isNull(), anyString(), any(), eq(true));
 
     final BucketEndpoint bucketEndpoint = spy(new BucketEndpoint());
     EndpointBuilder.newBucketEndpointBuilder()

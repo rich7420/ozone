@@ -691,7 +691,7 @@ public interface ClientProtocol {
 
   /**
    * Deletes keys through the list.
-   * @param volumeName Name of the Volume
+   * @param volumeName Name of the Volume; S3 clients may pass null to resolve it from their S3 context.
    * @param bucketName Name of the Bucket
    * @param keyNameList List of the Key
    * @param quiet if true, per-key failures are returned in the result map instead of being thrown

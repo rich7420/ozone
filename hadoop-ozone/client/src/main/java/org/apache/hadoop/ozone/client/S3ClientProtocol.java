@@ -393,7 +393,10 @@ final class S3ClientProtocol implements ClientProtocol {
   @Override
   public Map<String, ErrorInfo> deleteKeys(String volumeName, String bucketName, List<String> keyNameList,
       boolean quiet) throws IOException {
-    return delegate.deleteKeys(volumeName, bucketName, keyNameList, quiet);
+    if (volumeName != null || OzoneManagerVersion.S3_VOLUME_CONTEXT_RESOLUTION.isSupportedBy(delegate.getOmVersion())) {
+      return delegate.deleteKeys(volumeName, bucketName, keyNameList, quiet);
+    }
+    return delegate.getBucketDetails(resolveVolumeName(volumeName), bucketName).deleteKeys(keyNameList, quiet);
   }
 
   @Override
