@@ -20,6 +20,7 @@ package org.apache.hadoop.ozone.s3;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_TRAILER;
 import static org.apache.hadoop.ozone.s3.util.S3Utils.eol;
 
+import com.dynatrace.hash4j.hashing.Hashing;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -134,7 +135,11 @@ public class SignedChunksInputStream extends InputStream {
     CRC32C("x-amz-checksum-crc32c", 4),
     CRC64NVME("x-amz-checksum-crc64nvme", 8),
     SHA1("x-amz-checksum-sha1", 20),
-    SHA256("x-amz-checksum-sha256", 32);
+    SHA256("x-amz-checksum-sha256", 32),
+    SHA512("x-amz-checksum-sha512", 64),
+    XXHASH64("x-amz-checksum-xxhash64", 8),
+    XXHASH3("x-amz-checksum-xxhash3", 8),
+    XXHASH128("x-amz-checksum-xxhash128", 16);
 
     private final String headerName;
     private final int checksumLength;
@@ -162,6 +167,14 @@ public class SignedChunksInputStream extends InputStream {
         return TrailerChecksum.of(DigestUtils.getSha1Digest());
       case SHA256:
         return TrailerChecksum.of(DigestUtils.getSha256Digest());
+      case SHA512:
+        return TrailerChecksum.of(DigestUtils.getSha512Digest());
+      case XXHASH64:
+        return TrailerChecksum.of(Hashing.xxh64().hashStream());
+      case XXHASH3:
+        return TrailerChecksum.of(Hashing.xxh3_64().hashStream());
+      case XXHASH128:
+        return TrailerChecksum.of(Hashing.xxh3_128().hashStream());
       default:
         throw new IllegalStateException("Unsupported trailer checksum: " + this);
       }

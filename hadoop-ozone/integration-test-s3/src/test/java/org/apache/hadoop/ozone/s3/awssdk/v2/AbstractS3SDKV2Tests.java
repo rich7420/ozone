@@ -66,6 +66,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
@@ -120,6 +121,7 @@ import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -568,37 +570,84 @@ public abstract class AbstractS3SDKV2Tests extends OzoneTestBase implements Clus
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"", "bar"})
-  public void testPutObjectAsyncWithTrailingChecksum(String content) throws Exception {
+  @CsvSource({"CRC32_C,''", "CRC32_C,bar", "SHA512,''", "SHA512,bar"})
+  public void testPutObjectAsyncWithTrailingChecksum(ChecksumAlgorithm algorithm, String content) throws Exception {
     final String bucketName = getBucketName();
     final String keyName = getKeyName();
     s3Client.createBucket(b -> b.bucket(bucketName));
+    List<SdkHttpRequest> requests = new ArrayList<>();
 
     PutObjectResponse response = s3AsyncClient.putObject(b -> b.bucket(bucketName).key(keyName)
-            .checksumAlgorithm(ChecksumAlgorithm.CRC32_C), AsyncRequestBody.fromString(content))
+            .checksumAlgorithm(algorithm)
+            .overrideConfiguration(o -> o.addPlugin(c -> c.overrideConfiguration(
+                overrides -> overrides.addExecutionInterceptor(requestRecorder(requests))))),
+        AsyncRequestBody.fromString(content))
         .get(30, TimeUnit.SECONDS);
 
+    assertChecksumTrailers(requests, algorithm, S3Consts.STREAMING_UNSIGNED_PAYLOAD_TRAILER);
     assertThat(response.eTag()).isNotEmpty();
     assertThat(s3Client.getObjectAsBytes(b -> b.bucket(bucketName).key(keyName)).asUtf8String()).isEqualTo(content);
   }
 
-  @Test
-  public void testUploadPartAsyncWithTrailingChecksum() throws Exception {
+  @ParameterizedTest
+  @EnumSource(value = ChecksumAlgorithm.class, names = {"CRC32_C", "SHA512"})
+  public void testUploadPartAsyncWithTrailingChecksum(ChecksumAlgorithm algorithm) throws Exception {
     final String bucketName = getBucketName();
     final String keyName = getKeyName();
     final String content = "part1data";
     s3Client.createBucket(b -> b.bucket(bucketName));
     String uploadId = s3Client.createMultipartUpload(b -> b.bucket(bucketName).key(keyName)).uploadId();
+    List<SdkHttpRequest> requests = new ArrayList<>();
 
     UploadPartResponse response = s3AsyncClient.uploadPart(b -> b.bucket(bucketName).key(keyName).uploadId(uploadId)
-            .partNumber(1).checksumAlgorithm(ChecksumAlgorithm.CRC32_C), AsyncRequestBody.fromString(content))
+            .partNumber(1).checksumAlgorithm(algorithm)
+            .overrideConfiguration(o -> o.addPlugin(c -> c.overrideConfiguration(
+                overrides -> overrides.addExecutionInterceptor(requestRecorder(requests))))),
+        AsyncRequestBody.fromString(content))
         .get(30, TimeUnit.SECONDS);
 
+    assertChecksumTrailers(requests, algorithm, S3Consts.STREAMING_UNSIGNED_PAYLOAD_TRAILER);
     CompletedPart part = CompletedPart.builder().partNumber(1).eTag(response.eTag()).build();
     s3Client.completeMultipartUpload(b -> b.bucket(bucketName).key(keyName).uploadId(uploadId)
         .multipartUpload(CompletedMultipartUpload.builder().parts(part).build()));
 
     assertThat(s3Client.getObjectAsBytes(b -> b.bucket(bucketName).key(keyName)).asUtf8String()).isEqualTo(content);
+  }
+
+  @Test
+  public void testPutObjectWithSha512SignedTrailer() {
+    final String bucketName = getBucketName();
+    final String keyName = getKeyName();
+    final String content = "bar";
+    s3Client.createBucket(b -> b.bucket(bucketName));
+    List<SdkHttpRequest> requests = new ArrayList<>();
+
+    PutObjectResponse response = s3Client.putObject(b -> b.bucket(bucketName).key(keyName)
+            .checksumAlgorithm(ChecksumAlgorithm.SHA512)
+            .overrideConfiguration(o -> o.addPlugin(c -> c.overrideConfiguration(
+                overrides -> overrides.addExecutionInterceptor(requestRecorder(requests))))),
+        RequestBody.fromString(content));
+
+    assertChecksumTrailers(requests, ChecksumAlgorithm.SHA512, S3Consts.STREAMING_AWS4_HMAC_SHA256_PAYLOAD_TRAILER);
+    assertThat(response.eTag()).isNotEmpty();
+    assertThat(s3Client.getObjectAsBytes(b -> b.bucket(bucketName).key(keyName)).asUtf8String()).isEqualTo(content);
+  }
+
+  private static ExecutionInterceptor requestRecorder(List<SdkHttpRequest> requests) {
+    return new ExecutionInterceptor() {
+      @Override
+      public void beforeTransmission(Context.BeforeTransmission context, ExecutionAttributes executionAttributes) {
+        requests.add(context.httpRequest());
+      }
+    };
+  }
+
+  private static void assertChecksumTrailers(List<SdkHttpRequest> requests, ChecksumAlgorithm algorithm, String mode) {
+    assertThat(requests).isNotEmpty().allSatisfy(request -> {
+      assertThat(request.firstMatchingHeader(S3Consts.X_AMZ_TRAILER))
+          .contains("x-amz-checksum-" + algorithm.toString().toLowerCase(Locale.ROOT));
+      assertThat(request.firstMatchingHeader(S3Consts.X_AMZ_CONTENT_SHA256)).contains(mode);
+    });
   }
 
   @ParameterizedTest
